@@ -329,21 +329,18 @@ behaviour first, fix only when problems reproduce.
       250 kHz (BW 62.5 k × os 4) accepted, flowgraph runs clean.
 - [x] On-air decode: 4 MeshCore frames captured in a 30 s ambient
       listen, all CRC OK, SNR ~15 dB, sync 0x12 confirmed.
-- [ ] On-air `lora_tx` (transmit then verify on companion) — **TX path
-      incomplete**. `lora hwtest tx --binary chirpmunk-trx --tcp 10.0.23.152:5000`
-      run on 2026-05-04 against Heltec V3: chirpmunk-trx returned
-      `lora_tx_ack {ok=true}` for all 6 attempts (3 SF points × ADVERT +
-      TXT_MSG), companion received 0/6, no LED activity on the SDR. Root
-      cause: `dispatch_lora_tx` returns ok the moment the Transmitter
-      block accepts the msg pmt, *before* IQ flushes through the seify
-      Sink to the radio. Plus the chirpmunk-trx flowgraph is
-      `transmitter > inputs[0].tx_sink` (1-channel stream wire only) —
-      missing the gr4-lora SoapySink TX contract: `num_channels=2`
-      buddy-share zero-fill, `wait_burst_ack`, `max_underflow_count`,
-      `timed_tx`, `master_clock_rate` pinned with
-      `auto_tick_rate=false`. M7 task: port the gr4-lora UHD TX pattern
-      to FutureSDR's seify Sink (or fork seify with timed-burst
-      support).
+- [ ] On-air `lora_tx` (transmit then verify on companion) — **NOT yet
+      validated**. 2026-05-04 hwtest run: chirpmunk-trx returned
+      `lora_tx_ack {ok=true}` for all 6 attempts (3 SF × ADVERT+TXT_MSG),
+      companion received 0/6, no SDR LED activity. **Root cause is
+      undetermined.** FutureSDR `examples/lora/bin/tx.rs` is known
+      working with the same `seify::Builder().build_sink()` path, so the
+      seify TX contract is sufficient — chirpmunk-trx must be wiring or
+      configuring it differently. Diff against `examples/lora/bin/tx.rs`
+      and `examples/lora/bin/loopback.rs` is the next step. Suspect
+      areas (unverified): TX sample rate vs Transmitter os_factor,
+      Sink port wiring (`inputs[0].tx_sink` syntax), TX gain scaling on
+      LibreSDR B220mini.
 - [ ] DC spur observation + mitigation (port `dc_blocker_cutoff` if
       needed; not blocking decode at present antenna position).
 - [ ] PlutoSDR / IIO direct path (deferred research).
