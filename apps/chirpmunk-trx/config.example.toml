@@ -37,11 +37,11 @@ enable_tx = true
 use_aa_filter = true
 
 [trx.transmit]
-sf           = 8
-bw           = 62500
-cr           = 8
-sync_word    = 0x12
-preamble_len = 16
+sf           = 8           # 7..=12
+bw           = 62500       # Hz; one of {7.8k, 10.4k, 15.6k, 20.8k, 31.2k, 41.7k, 62.5k, 125k, 250k, 500k}
+cr           = 4           # 1..=4 (chirpmunk: numerator-1) or 5..=8 (gr4-lora: denominator); 4 == CR 4/8
+sync_word    = 0x12        # 0x12 MeshCore/Reticulum, 0x2B Meshtastic, 0x34 LoRaWAN
+preamble_len = 16          # >= 6; MeshCore default 16, Semtech default 8
 
 [trx.receive]
 bandwidths = [62500, 125000, 250000]
