@@ -167,17 +167,24 @@ struct Telemetry {
 impl Telemetry {
     fn from_map(map: &std::collections::HashMap<String, Pmt>) -> Self {
         let f = |k: &str| -> Option<f64> {
-            map.get(k).and_then(|p| match p {
-                Pmt::F32(v) => Some(*v as f64),
-                Pmt::F64(v) => Some(*v),
-                Pmt::U64(v) => Some(*v as f64),
-                Pmt::Usize(v) => Some(*v as f64),
-                _ => None,
-            })
+            map.get(k)
+                .and_then(|p| match p {
+                    Pmt::F32(v) => Some(*v as f64),
+                    Pmt::F64(v) => Some(*v),
+                    Pmt::U64(v) => Some(*v as f64),
+                    Pmt::Usize(v) => Some(*v as f64),
+                    Pmt::Isize(v) => Some(*v as f64),
+                    _ => None,
+                })
+                .filter(|v| v.is_finite())
         };
+        // Source key list per chirpmunk-phy frame_sync emissions; the
+        // schema-named keys (`snr_db`, `noise_floor_db`) are accepted
+        // as fallbacks so future PHY upgrades that switch to the
+        // dB-explicit name still propagate without code change.
         Self {
-            snr_db: f("snr_db"),
-            noise_floor_db: f("noise_floor_db"),
+            snr_db: f("snr").or_else(|| f("snr_db")),
+            noise_floor_db: f("noise_floor").or_else(|| f("noise_floor_db")),
             peak_db: f("peak_db"),
             snr_db_td: f("snr_db_td"),
             channel_freq: f("channel_freq"),
