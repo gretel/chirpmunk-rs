@@ -21,7 +21,10 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chirpmunk_blocks::{FrameSink, FrameSinkConfig, dispatch_lora_tx};
+use chirpmunk_blocks::{
+    FrameSink, FrameSinkConfig, SoapyDirectSink, SoapyDirectSource, SoapyRxConfig, SoapyTxConfig,
+    dispatch_lora_tx, open_device,
+};
 use chirpmunk_cbor::LoraTx;
 use chirpmunk_config::{Config, Radio, RadioOrSection};
 use chirpmunk_phy::default_values::HAS_CRC;
@@ -31,7 +34,6 @@ use chirpmunk_phy::utils::{
 use chirpmunk_phy::{build_lora_rx_soft_decoding, build_lora_tx};
 use chirpmunk_udp::Server;
 use clap::Parser;
-use futuresdr::blocks::seify::Builder as SeifyBuilder;
 use futuresdr::prelude::*;
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::{error, info, warn};
@@ -297,32 +299,43 @@ async fn main() -> Result<()> {
             freq = radio.freq,
             rx_gain = radio.rx_gain,
             tx_gain = radio.tx_gain,
-            "building seify source + sink"
+            "opening soapy direct device"
         );
 
-        let mut rx_builder = SeifyBuilder::new(device_label.as_str())
-            .context("parse seify device args")?
-            .frequency(radio.freq as f64)
-            .sample_rate(sample_rate)
-            .gain(radio.rx_gain);
-        if let Some(ant) = radio.rx_antenna.first() {
-            rx_builder = rx_builder.antenna(ant.as_str());
-        }
-        let rx_source = rx_builder.build_source().context("build seify source")?;
+        // Single physical USRP, single soapysdr::Device handle, cloned
+        // (Arc-shared) to RX source and TX sink. seify cannot be used
+        // for TX on the LibreSDR_B220mini clone — its TxStreamer trait
+        // omits read_status / multi-channel buddy-share semantics that
+        // this hardware requires. See `references/tx-gap.md` skill.
+        let dev = open_device(device_label.as_str()).context("open soapy device")?;
 
-        let mut tx_builder = SeifyBuilder::new(device_label.as_str())
-            .context("parse seify device args")?
-            .frequency(radio.freq as f64)
-            .sample_rate(sample_rate)
-            .gain(radio.tx_gain);
-        if !radio.tx_antenna.is_empty() {
-            tx_builder = tx_builder.antenna(radio.tx_antenna.as_str());
-        }
-        let tx_sink = tx_builder.build_sink().context("build seify sink")?;
+        let rx_cfg = SoapyRxConfig {
+            freq_hz: radio.freq as f64,
+            rate_hz: sample_rate,
+            gain_db: radio.rx_gain,
+            antenna: radio.rx_antenna.first().cloned(),
+            channel: 0,
+        };
+        let tx_cfg = SoapyTxConfig {
+            freq_hz: radio.freq as f64,
+            rate_hz: sample_rate,
+            gain_db: radio.tx_gain,
+            antenna: if radio.tx_antenna.is_empty() {
+                None
+            } else {
+                Some(radio.tx_antenna.clone())
+            },
+            // 200 ms in the future — gives host time to pre-fill UHD's
+            // internal ring before any RF is emitted.
+            activation_offset_ns: 200_000_000,
+        };
+
+        let rx_source = fg.add(SoapyDirectSource::new(dev.clone(), rx_cfg));
+        let tx_sink = fg.add(SoapyDirectSink::new(dev.clone(), tx_cfg));
 
         connect!(fg,
-            rx_source.outputs[0] > frame_sync;
-            transmitter > inputs[0].tx_sink;
+            rx_source > frame_sync;
+            transmitter > tx_sink;
             decoder.out_annotated | frame_sink;
         );
     }

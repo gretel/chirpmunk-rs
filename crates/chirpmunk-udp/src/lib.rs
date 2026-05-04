@@ -131,10 +131,15 @@ impl Server {
             },
         );
         let total = clients.len();
+        drop(clients);
         if was_known {
             tracing::debug!(?peer, filter = ?sync_words, total, "client keepalive");
         } else {
             info!(?peer, filter = ?sync_words, total, "client subscribed");
+            // Send a CBOR empty-map ack so subscribe-and-wait probes
+            // (e.g. lora hwtest harness) detect readiness without
+            // depending on later broadcast traffic.
+            let _ = self.socket.send_to(&[0xa0], peer).await;
         }
     }
 
@@ -252,6 +257,10 @@ mod tests {
         }
         assert_eq!(server.client_count().await, 1);
 
+        // Drain the subscribe-ack (single byte 0xa0 = empty CBOR map).
+        let mut ack = vec![0u8; 4];
+        let _ = timeout(Duration::from_millis(150), client.recv(&mut ack)).await;
+
         let mut payload = Vec::new();
         let mut e = minicbor::Encoder::new(&mut payload);
         e.map(2).unwrap();
@@ -293,6 +302,10 @@ mod tests {
             }
         }
         assert_eq!(server.client_count().await, 1);
+
+        // Drain the subscribe-ack (single byte 0xa0 = empty CBOR map).
+        let mut ack = vec![0u8; 4];
+        let _ = timeout(Duration::from_millis(150), client.recv(&mut ack)).await;
 
         server.broadcast(b"x", Some(0x2B)).await.unwrap();
         let mut rx = vec![0u8; 16];
