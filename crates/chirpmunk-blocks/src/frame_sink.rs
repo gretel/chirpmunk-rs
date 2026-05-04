@@ -44,7 +44,7 @@ impl FrameSink {
         Self { cfg, seq: 0, tx }
     }
 
-    fn build_frame(&self, payload: Vec<u8>, snr_db: Option<f64>) -> LoraFrame {
+    fn build_frame(&self, payload: Vec<u8>, telemetry: Telemetry) -> LoraFrame {
         let payload_hash = fnv1a_64(&payload);
         let payload_len = payload.len() as u32;
         LoraFrame {
@@ -56,18 +56,18 @@ impl FrameSink {
                 cr: self.cfg.cr,
                 crc_valid: true,
                 sync_word: self.cfg.sync_word,
-                snr_db: snr_db.unwrap_or(0.0),
-                noise_floor_db: None,
-                peak_db: None,
-                snr_db_td: None,
-                channel_freq: None,
-                decode_bw: None,
-                cfo_int: None,
-                cfo_frac: None,
-                sfo_hat: None,
-                sample_rate: None,
-                frequency_corrected: None,
-                ppm_error: None,
+                snr_db: telemetry.snr_db.unwrap_or(0.0),
+                noise_floor_db: telemetry.noise_floor_db,
+                peak_db: telemetry.peak_db,
+                snr_db_td: telemetry.snr_db_td,
+                channel_freq: telemetry.channel_freq,
+                decode_bw: telemetry.decode_bw,
+                cfo_int: telemetry.cfo_int,
+                cfo_frac: telemetry.cfo_frac,
+                sfo_hat: telemetry.sfo_hat,
+                sample_rate: telemetry.sample_rate,
+                frequency_corrected: telemetry.frequency_corrected,
+                ppm_error: telemetry.ppm_error,
             },
             carrier: Carrier {
                 sync_word: self.cfg.sync_word,
@@ -97,22 +97,21 @@ impl FrameSink {
         pmt: Pmt,
     ) -> Result<Pmt> {
         match pmt {
-            Pmt::Blob(payload) => self.emit(payload, None).await,
+            Pmt::Blob(payload) => self.emit(payload, Telemetry::default()).await,
             Pmt::MapStrPmt(map) => {
                 let mut payload = match map.get("payload") {
                     Some(Pmt::Blob(p)) => p.clone(),
                     _ => return Ok(Pmt::InvalidValue),
                 };
-                let has_crc = matches!(map.get("has_crc"), Some(Pmt::Bool(true)));
+                let has_crc = match map.get("has_crc") {
+                    Some(Pmt::Bool(b)) => *b,
+                    _ => false,
+                };
                 if has_crc && payload.len() >= 2 {
                     payload.truncate(payload.len() - 2);
                 }
-                let snr = map.get("snr_db").and_then(|p| match p {
-                    Pmt::F32(v) => Some(*v as f64),
-                    Pmt::F64(v) => Some(*v),
-                    _ => None,
-                });
-                self.emit(payload, snr).await
+                let telemetry = Telemetry::from_map(&map);
+                self.emit(payload, telemetry).await
             }
             Pmt::Finished => {
                 io.finished = true;
@@ -122,15 +121,62 @@ impl FrameSink {
         }
     }
 
-    async fn emit(&mut self, payload: Vec<u8>, snr_db: Option<f64>) -> Result<Pmt> {
+    async fn emit(&mut self, payload: Vec<u8>, telemetry: Telemetry) -> Result<Pmt> {
         self.seq = self.seq.wrapping_add(1);
-        let frame = self.build_frame(payload, snr_db);
+        let frame = self.build_frame(payload, telemetry);
         let buf = chirpmunk_cbor::to_vec(&frame)
             .map_err(|e| futuresdr::runtime::Error::RuntimeError(e.to_string()))?;
         if self.tx.send((buf, self.cfg.sync_word)).is_err() {
             tracing::warn!("frame_sink: broadcaster channel closed");
         }
         Ok(Pmt::Ok)
+    }
+}
+
+/// Optional PHY measurements harvested from the upstream
+/// `MapStrPmt`. Missing keys remain `None` and are omitted in the
+/// emitted CBOR `lora_frame`.
+#[derive(Debug, Default, Clone, Copy)]
+struct Telemetry {
+    snr_db: Option<f64>,
+    noise_floor_db: Option<f64>,
+    peak_db: Option<f64>,
+    snr_db_td: Option<f64>,
+    channel_freq: Option<f64>,
+    decode_bw: Option<f64>,
+    cfo_int: Option<f64>,
+    cfo_frac: Option<f64>,
+    sfo_hat: Option<f64>,
+    sample_rate: Option<f64>,
+    frequency_corrected: Option<f64>,
+    ppm_error: Option<f64>,
+}
+
+impl Telemetry {
+    fn from_map(map: &std::collections::HashMap<String, Pmt>) -> Self {
+        let f = |k: &str| -> Option<f64> {
+            map.get(k).and_then(|p| match p {
+                Pmt::F32(v) => Some(*v as f64),
+                Pmt::F64(v) => Some(*v),
+                Pmt::U64(v) => Some(*v as f64),
+                Pmt::Usize(v) => Some(*v as f64),
+                _ => None,
+            })
+        };
+        Self {
+            snr_db: f("snr_db"),
+            noise_floor_db: f("noise_floor_db"),
+            peak_db: f("peak_db"),
+            snr_db_td: f("snr_db_td"),
+            channel_freq: f("channel_freq"),
+            decode_bw: f("decode_bw"),
+            cfo_int: f("cfo_int"),
+            cfo_frac: f("cfo_frac"),
+            sfo_hat: f("sfo_hat"),
+            sample_rate: f("sample_rate"),
+            frequency_corrected: f("frequency_corrected"),
+            ppm_error: f("ppm_error"),
+        }
     }
 }
 

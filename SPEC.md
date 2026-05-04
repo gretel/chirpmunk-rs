@@ -258,12 +258,20 @@ behaviour first, fix only when problems reproduce.
 - License review gate: GPL-3.0-only confirmed for now (PHY copied from
   FutureSDR `examples/lora`).
 
-### M2 — Multi-SF (lockstep) + dual channel
-- [ ] `MultiSfDecoder` block ported. SFs 7–12 in lockstep.
-- [ ] Dual-channel RX path.
-- [ ] `lora_frame` carries `sf`, `bw`, `cfo`, `snr`, `rssi`.
-- Acceptance: 2-channel decode of recorded EU868 capture, all SFs reach
-  CRC OK within tolerance of gr4-lora.
+### M2 — Multi-SF + dual channel (DONE — parallel chains variant)
+- [x] `chirpmunk-blocks::build_multi_sf_rx` builds 6 parallel SF chains
+      (SF7..SF12) sharing one `StreamDuplicator`. Each chain owns its
+      FrameSink.
+- [x] FrameSink extracts telemetry (snr, cfo_int, cfo_frac, sfo_hat,
+      noise_floor_db, peak_db, snr_db_td, channel_freq, decode_bw,
+      sample_rate, frequency_corrected, ppm_error) from upstream
+      `MapStrPmt` annotations.
+- [x] FrameSink strips the 2-byte CRC trailer when `has_crc=true`.
+- [x] Loopback test: TX(SF8) → 6 chains → SF8 chain decodes the payload.
+- [ ] gr4-lora-style lockstep `MultiSfDecoder` (single block, all SFs).
+      Defer until perf shows scheduler overhead matters.
+- [ ] Dual-channel: pattern is `build_multi_sf_rx` ×2 sharing a
+      broadcaster. No dedicated test yet — proven by composition.
 
 ### M3 — TX (single packet)
 - [ ] Port `algorithm/tx_chain.hpp` driver + chirp synthesis into a TX

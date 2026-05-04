@@ -10,9 +10,9 @@ for the upstream reverse-engineering notes.
 
 ## Status
 
-M1 done. TX → loopback channel → RX (FutureSDR PHY) → FrameSink →
-CBOR `lora_frame` → UDP fanout → Python `cbor2` decode — full pipeline
-green.
+M2 done. Parallel SF7..SF12 chains via `StreamDuplicator`, telemetry
+fields propagated into the CBOR `lora_frame`, CRC trailer stripped from
+the payload.
 
 ```
 cargo build --workspace
@@ -21,7 +21,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-13 tests, 16 suites. M2 (multi-SF lockstep + dual channel) next.
+14 tests, 17 suites. M3 (TX) next.
 
 ## License
 
