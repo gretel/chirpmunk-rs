@@ -10,9 +10,9 @@ for the upstream reverse-engineering notes.
 
 ## Status
 
-M2 done. Parallel SF7..SF12 chains via `StreamDuplicator`, telemetry
-fields propagated into the CBOR `lora_frame`, CRC trailer stripped from
-the payload.
+M3 done. CBOR `lora_tx` requests dispatched to the Flowgraph
+Transmitter; loopback verifies payload round-trip and `lora_tx_ack`
+return.
 
 ```
 cargo build --workspace
@@ -21,7 +21,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-14 tests, 17 suites. M3 (TX) next.
+20 tests, 18 suites. M4 (wideband scanner) next; hardware verification
+of M3 deferred to a manual session.
 
 ## License
 

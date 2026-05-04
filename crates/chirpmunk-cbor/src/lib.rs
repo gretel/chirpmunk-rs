@@ -15,9 +15,11 @@ use thiserror::Error;
 
 pub mod frame;
 pub mod subscribe;
+pub mod tx;
 
 pub use frame::{Carrier, LoraFrame, Phy};
 pub use subscribe::Subscribe;
+pub use tx::{LoraTx, LoraTxAck};
 
 #[derive(Debug, Error)]
 pub enum Error {

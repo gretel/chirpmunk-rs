@@ -371,6 +371,7 @@ dependencies = [
 name = "chirpmunk-blocks"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "chirpmunk-cbor",
  "chirpmunk-phy",
  "chirpmunk-udp",
