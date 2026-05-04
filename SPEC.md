@@ -316,19 +316,23 @@ behaviour first, fix only when problems reproduce.
       lifecycle deferred.
 - [ ] Hardware: real seify Sink + Source paths (M6 deferred research).
 
-### M6 — Hardware bring-up (IN PROGRESS)
+### M6 — Hardware bring-up (DONE — RX confirmed on-air)
 - [x] `chirpmunk-trx` hardware mode: seify Source + Sink wired into the
-      flowgraph (`--device-args 'soapy_driver=uhd'`, `--freq`, `--rx-gain`,
-      `--tx-gain`, `--os-factor`, optional `--rx-antenna` / `--tx-antenna`).
-      `--loopback` retained for software CI.
+      flowgraph. CLI knobs: `--device-args 'soapy_driver=uhd,type=b200'`,
+      `--freq`, `--sf`, `--bw`, `--cr`, `--preamble-len`, `--sync-word`,
+      `--rx-gain`, `--tx-gain`, `--os-factor`, `--rx-antenna`,
+      `--tx-antenna`. `--loopback` retained for software CI.
+- [x] Defaults match gr4-lora MeshCore EU868: SF8, BW62.5k, CR_4_8,
+      sync 0x12, preamble 16, freq 869.618 MHz.
 - [x] LibreSDR B220 Mini (B210 product) bring-up via UHD: FPGA loads,
-      register loopback passes, master clock auto-set to 32 MHz,
-      sample rate 500 kHz (BW 125 k × os 4) accepted, flowgraph runs
-      clean for 22 s with no errors. Daemon shuts down gracefully on
-      SIGINT.
-- [ ] On-air `lora_tx` decode against companion (Heltec V3 / RAK4631).
-- [ ] DC spur observation + mitigation (likely needed; gr4-lora found
-      `dc_blocker_cutoff = 2 kHz` at zero-IF).
+      register loopback passes, MCR auto-set to 32 MHz, sample rate
+      250 kHz (BW 62.5 k × os 4) accepted, flowgraph runs clean.
+- [x] On-air decode: 4 MeshCore frames captured in a 30 s ambient
+      listen, all CRC OK, SNR ~15 dB, sync 0x12 confirmed.
+- [ ] On-air `lora_tx` (transmit then verify on companion) — deferred
+      until companion device available for round-trip.
+- [ ] DC spur observation + mitigation (port `dc_blocker_cutoff` if
+      needed; not blocking decode at present antenna position).
 - [ ] PlutoSDR / IIO direct path (deferred research).
 - [ ] LBT (Listen-Before-Talk) — only if contention measured.
 - [ ] tezuka_fw armv7 cross-build (deferred research).

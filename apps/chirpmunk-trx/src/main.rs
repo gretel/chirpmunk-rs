@@ -19,9 +19,10 @@ use std::net::SocketAddr;
 use anyhow::{Context, Result};
 use chirpmunk_blocks::{FrameSink, FrameSinkConfig, dispatch_lora_tx};
 use chirpmunk_cbor::LoraTx;
-use chirpmunk_phy::default_values::{HAS_CRC, PREAMBLE_LEN};
+use chirpmunk_phy::default_values::HAS_CRC;
 use chirpmunk_phy::utils::{
     Bandwidth, Channel, CodeRate, HeaderMode, LdroMode, SpreadingFactor, SynchWord,
+    SynchWordEnumParser,
 };
 use chirpmunk_phy::{build_lora_rx_soft_decoding, build_lora_tx};
 use chirpmunk_udp::Server;
@@ -33,8 +34,6 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 const PAD: usize = 10_000;
-const SF: SpreadingFactor = SpreadingFactor::SF7;
-const BW_HZ: f64 = 125_000.0;
 
 #[derive(Parser, Debug)]
 #[clap(version, about = "chirpmunk full-duplex LoRa transceiver daemon")]
@@ -47,13 +46,30 @@ struct Args {
     /// for both TX and RX.
     #[clap(long)]
     loopback: bool,
-    /// seify device args. E.g. "driver=uhd" or
-    /// "driver=uhd,serial=BADC10E". Ignored in loopback mode.
-    #[clap(long, default_value = "driver=uhd")]
+    /// seify device args. E.g. "soapy_driver=uhd". Note seify reserves
+    /// `driver=` for its own backend selector — pass `soapy_driver=` to
+    /// route through to SoapySDR.
+    #[clap(long, default_value = "soapy_driver=uhd")]
     device_args: String,
     /// Carrier centre frequency in Hz.
     #[clap(long, default_value_t = 869_618_000.0)]
     freq: f64,
+    /// Spreading factor.
+    #[clap(long, value_enum, default_value_t = SpreadingFactor::SF8)]
+    sf: SpreadingFactor,
+    /// Bandwidth.
+    #[clap(long, value_enum, default_value_t = Bandwidth::BW62)]
+    bw: Bandwidth,
+    /// Coding rate (CR_4_5..CR_4_8).
+    #[clap(long, value_enum, default_value_t = CodeRate::CR_4_8)]
+    cr: CodeRate,
+    /// Preamble length (symbols). MeshCore default is 16.
+    #[clap(long, default_value_t = 16)]
+    preamble_len: usize,
+    /// Sync word. 0x12 = MeshCore/Reticulum/Private. Accepts lowercase
+    /// names (private/public/meshtastic) or a numeric u8/u16.
+    #[clap(long, value_parser = SynchWordEnumParser, default_value = "private")]
+    sync_word: SynchWord,
     /// RX gain in dB.
     #[clap(long, default_value_t = 60.0)]
     rx_gain: f64,
@@ -108,39 +124,41 @@ async fn main() -> Result<()> {
         });
     }
 
+    let bw_hz: f64 = Into::<usize>::into(args.bw) as f64;
+
     let mut fg = Flowgraph::new();
     let transmitter = build_lora_tx(
         &mut fg,
-        Bandwidth::default(),
-        SF,
-        CodeRate::default(),
+        args.bw,
+        args.sf,
+        args.cr,
         HAS_CRC,
         LdroMode::AUTO,
         HeaderMode::Explicit,
         args.os_factor,
-        SynchWord::Private,
-        Some(PREAMBLE_LEN),
+        args.sync_word,
+        Some(args.preamble_len),
         PAD,
     )?;
     let (frame_sync, decoder) = build_lora_rx_soft_decoding(
         &mut fg,
         Channel::EU868_1,
-        Bandwidth::default(),
-        SF,
+        args.bw,
+        args.sf,
         HeaderMode::Explicit,
         LdroMode::AUTO,
-        Some(&[SynchWord::Private]),
+        Some(&[args.sync_word]),
         args.os_factor,
-        None,
+        Some(args.preamble_len),
         None,
         false,
         None,
     )?;
 
     let cfg = FrameSinkConfig {
-        sf: 7,
-        bw: 125_000,
-        cr: 4,
+        sf: u8::from(args.sf),
+        bw: Into::<usize>::into(args.bw) as u32,
+        cr: u8::from(args.cr),
         sync_word: 0x12,
         device: Some(if args.loopback {
             "chirpmunk-trx-loopback".into()
@@ -162,7 +180,7 @@ async fn main() -> Result<()> {
             decoder.out_annotated | frame_sink;
         );
     } else {
-        let sample_rate = BW_HZ * args.os_factor as f64;
+        let sample_rate = bw_hz * args.os_factor as f64;
         info!(
             device_args = %args.device_args,
             freq = args.freq,
