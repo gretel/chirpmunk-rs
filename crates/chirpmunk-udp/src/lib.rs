@@ -122,6 +122,7 @@ impl Server {
 
     async fn add_client(&self, peer: SocketAddr, sync_words: Vec<u16>) {
         let mut clients = self.clients.lock().await;
+        let was_known = clients.contains_key(&peer);
         clients.insert(
             peer,
             Client {
@@ -130,7 +131,11 @@ impl Server {
             },
         );
         let total = clients.len();
-        info!(?peer, filter = ?sync_words, total, "client subscribed");
+        if was_known {
+            tracing::debug!(?peer, filter = ?sync_words, total, "client keepalive");
+        } else {
+            info!(?peer, filter = ?sync_words, total, "client subscribed");
+        }
     }
 
     /// Snapshot of currently-registered clients (test/inspection only).
