@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Example chirpmunk-trx config. Copy to
+# `~/.config/chirpmunk/config.toml` and edit. CLI overrides:
+#   --loopback         force loopback (skips device + radio)
+#   --bind host:port   override [trx.network] bind
+
+[device]
+driver = "uhd"
+param  = ""
+clock  = "internal"
+
+[logging]
+level = "INFO"
+
+[chirpmunk]
+loopback = false
+
+# ── Radio frontend ───────────────────────────────────────────────────
+[radio_868]
+freq           = 869618000
+rx_channel     = [0]
+rx_antenna     = ["RX2"]
+tx_channel     = 0
+tx_antenna     = "TX/RX"
+rx_gain        = 50.0
+tx_gain        = 50.0
+lo_offset      = 62500
+dc_offset_auto = true
+
+# ── Transceiver ──────────────────────────────────────────────────────
+[trx]
+name      = "chirpmunk USRP 868"
+radio     = "radio_868"
+rate      = 1000000
+enable_tx = true
+use_aa_filter = true
+
+[trx.transmit]
+sf           = 8
+bw           = 62500
+cr           = 8
+sync_word    = 0x12
+preamble_len = 16
+
+[trx.receive]
+bandwidths = [62500, 125000, 250000]
+
+[[trx.receive.chain]]
+label = "promisc"
+
+[trx.network]
+udp_listen      = "127.0.0.1"
+udp_port        = 5556
+status_interval = 10
+lbt             = false
+lbt_timeout_ms  = 2000
+tx_queue_depth  = 8

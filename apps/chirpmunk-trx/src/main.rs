@@ -105,6 +105,13 @@ async fn main() -> Result<()> {
         (None, false) => {
             let path = default_config_path()
                 .ok_or_else(|| anyhow!("could not determine config path; pass --config"))?;
+            if !path.exists() {
+                bail!(
+                    "no config at {}\n\nFirst run? Try one of:\n  chirpmunk-trx --loopback                 # standalone, no hardware\n  chirpmunk-trx --config <path>            # explicit config\n  cp apps/chirpmunk-trx/config.example.toml {}\n",
+                    path.display(),
+                    path.display(),
+                );
+            }
             Some(
                 Config::from_path(&path)
                     .with_context(|| format!("read config {}", path.display()))?,
