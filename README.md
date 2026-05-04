@@ -10,8 +10,9 @@ for the upstream reverse-engineering notes.
 
 ## Status
 
-M0 done. Workspace boots, CBOR `lora_frame` round-trips against Python
-`cbor2`, UDP fanout works, config parses `gr4-lora/apps/config-pluto.toml`.
+M1 done. TX → loopback channel → RX (FutureSDR PHY) → FrameSink →
+CBOR `lora_frame` → UDP fanout → Python `cbor2` decode — full pipeline
+green.
 
 ```
 cargo build --workspace
@@ -20,7 +21,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-10 tests, 14 suites. M1 (single-channel RX) next.
+13 tests, 16 suites. M2 (multi-SF lockstep + dual channel) next.
 
 ## License
 

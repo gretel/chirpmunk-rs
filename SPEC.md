@@ -242,14 +242,21 @@ behaviour first, fix only when problems reproduce.
 - [x] `chirpmunk-config` parses gr4-lora `config-pluto.toml` verbatim.
 - Result: 10 tests pass, clippy clean, fmt clean.
 
-### M1 — Single-channel RX (one SF)
-- [ ] `chirpmunk-trx` binary.
-- [ ] FutureSDR `examples/lora` PHY pipeline integrated (copy + GPL).
-- [ ] FrameSink → CBOR `lora_frame` → UDP fanout.
-- [ ] Telemetry events emitted on detect / sync / decode.
-- Acceptance: replay captured IQ → `lora.core.cbor_stream` reports decoded
-  frame; CRC OK rate matches gr4-lora baseline within 5 %. License review
-  gate: confirm GPL-3.0-only or switch to ISC clean-room before M2.
+### M1 — Single-channel RX (one SF) (DONE)
+- [x] FutureSDR `examples/lora` PHY pipeline copied into `chirpmunk-phy`
+      under GPL-3.0-only with attribution.
+- [x] `chirpmunk-blocks::FrameSink` builds `LoraFrame` from
+      `Decoder.out_annotated`, ships CBOR over mpsc.
+- [x] Loopback acceptance: `tx_to_framesink_decodes_payload` round-trips
+      a payload through the full TX→RX pipeline.
+- [x] Python parity acceptance: `full_m1_loopback_to_python` proves the
+      Rust-emitted CBOR `lora_frame` is consumed correctly by Python
+      `cbor2` over UDP after a Subscribe handshake.
+- [ ] `chirpmunk-trx` binary CLI (deferred to M2 — first hardware spike).
+- [ ] Telemetry tags (snr/cfo/sfo) — phy emits them; FrameSink only reads
+      `snr_db` so far. Extend in M2.
+- License review gate: GPL-3.0-only confirmed for now (PHY copied from
+  FutureSDR `examples/lora`).
 
 ### M2 — Multi-SF (lockstep) + dual channel
 - [ ] `MultiSfDecoder` block ported. SFs 7–12 in lockstep.

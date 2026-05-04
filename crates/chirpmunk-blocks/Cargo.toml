@@ -16,3 +16,10 @@ chirpmunk-phy.workspace = true
 chirpmunk-udp.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tokio.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+uuid = { version = "1.10", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "process", "io-util", "time"] }
+serde_json = "1.0"

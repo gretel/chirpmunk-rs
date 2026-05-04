@@ -10,5 +10,17 @@ repository.workspace = true
 description = "LoRa PHY primitives (CSS demod, decode chain, preamble sync)."
 
 [dependencies]
+futuresdr.workspace = true
 futuredsp.workspace = true
 thiserror.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+rustfft = "6.4"
+num-complex = "0.4"
+num-traits = "0.2"
+rand = "0.10"
+scilib = "1.0"
+strum = "0.27"
+strum_macros = "0.27"
+regex = "1.10"
