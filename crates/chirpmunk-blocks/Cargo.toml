@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "chirpmunk-blocks"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "FutureSDR blocks for chirpmunk: Splitter, MultiSfDecoder, FrameSink, ScanController, etc."
+
+[dependencies]
+futuresdr.workspace = true
+chirpmunk-cbor.workspace = true
+chirpmunk-phy.workspace = true
+chirpmunk-udp.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

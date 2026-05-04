@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "chirpmunk-scan"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "chirpmunk wideband LoRa scanner."
+
+[[bin]]
+name = "chirpmunk-scan"
+path = "src/main.rs"
+
+[dependencies]
+futuresdr.workspace = true
+chirpmunk-blocks.workspace = true
+chirpmunk-cbor.workspace = true
+chirpmunk-config.workspace = true
+chirpmunk-udp.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
