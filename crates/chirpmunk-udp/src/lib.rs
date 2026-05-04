@@ -16,6 +16,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tracing::{debug, info, trace, warn};
 
 const MAX_DATAGRAM: usize = 64 * 1024;
@@ -37,11 +38,18 @@ struct Client {
     send_failures: u32,
 }
 
-/// UDP server: accepts subscribers, broadcasts CBOR frames.
+/// One inbound non-subscribe datagram forwarded to the application.
+pub type Inbound = (SocketAddr, Vec<u8>);
+
+/// UDP server: accepts subscribers, broadcasts CBOR frames. When built
+/// with [`Server::bind_with_inbound`], non-subscribe datagrams are
+/// forwarded over an mpsc channel so the application can dispatch
+/// them (e.g. `lora_tx` requests).
 #[derive(Clone)]
 pub struct Server {
     socket: Arc<UdpSocket>,
     clients: Arc<Mutex<HashMap<SocketAddr, Client>>>,
+    inbound: Option<UnboundedSender<Inbound>>,
 }
 
 impl Server {
@@ -52,7 +60,26 @@ impl Server {
         Ok(Self {
             socket: Arc::new(socket),
             clients: Arc::new(Mutex::new(HashMap::new())),
+            inbound: None,
         })
+    }
+
+    /// Bind plus inbound dispatch channel. The receiver yields one entry
+    /// per non-subscribe datagram with `(peer, raw_bytes)`. The
+    /// application is responsible for parsing.
+    pub async fn bind_with_inbound(
+        addr: impl tokio::net::ToSocketAddrs,
+    ) -> Result<(Self, UnboundedReceiver<Inbound>)> {
+        let socket = UdpSocket::bind(addr).await?;
+        let local = socket.local_addr()?;
+        info!(?local, "chirpmunk-udp bound (with inbound)");
+        let (tx, rx) = unbounded_channel();
+        let server = Self {
+            socket: Arc::new(socket),
+            clients: Arc::new(Mutex::new(HashMap::new())),
+            inbound: Some(tx),
+        };
+        Ok((server, rx))
     }
 
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
@@ -82,7 +109,10 @@ impl Server {
                 Err(e) => warn!(?peer, error = %e, "bad subscribe"),
             },
             Some(other) => {
-                trace!(?peer, frame_type = other, "ignored frame");
+                trace!(?peer, frame_type = other, "forwarding to inbound");
+                if let Some(tx) = &self.inbound {
+                    let _ = tx.send((peer, bytes.to_vec()));
+                }
             }
             None => {
                 self.add_client(peer, Vec::new()).await;
@@ -106,6 +136,13 @@ impl Server {
     /// Snapshot of currently-registered clients (test/inspection only).
     pub async fn client_count(&self) -> usize {
         self.clients.lock().await.len()
+    }
+
+    /// Send a unicast datagram to a specific peer (e.g. to deliver a
+    /// `lora_tx_ack` back to the requesting client).
+    pub async fn send_to(&self, bytes: &[u8], peer: SocketAddr) -> Result<()> {
+        self.socket.send_to(bytes, peer).await?;
+        Ok(())
     }
 
     /// Broadcast `bytes` to all clients whose filter accepts `sync_word`.

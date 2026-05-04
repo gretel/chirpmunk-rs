@@ -18,8 +18,14 @@ futuresdr.workspace = true
 chirpmunk-blocks.workspace = true
 chirpmunk-cbor.workspace = true
 chirpmunk-config.workspace = true
+chirpmunk-phy.workspace = true
 chirpmunk-udp.workspace = true
 clap.workspace = true
-tokio.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time", "signal"] }
 tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 anyhow.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time"] }
+serde_json = "1.0"

@@ -10,10 +10,11 @@ for the upstream reverse-engineering notes.
 
 ## Status
 
-M0..M3 done. IQ replay decodes the canonical
-`gr4-lora/test_vectors/sf7_cr1_bw125000` capture (payload
-`Hello MeshCore`). Loopback proves TX→RX→FrameSink→CBOR→UDP→Python.
-CBOR `lora_tx` drives dispatch and returns `lora_tx_ack`.
+M0..M5 done (loopback). `chirpmunk-trx --loopback` runs as a daemon:
+binds UDP, accepts subscribe, dispatches incoming `lora_tx` requests
+through the flowgraph, broadcasts `lora_frame` events back, replies with
+`lora_tx_ack`. End-to-end Python parity test spawns the binary and
+validates the round-trip.
 
 ```
 cargo build --workspace
@@ -22,9 +23,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-21 tests, 19 suites. M4 (wideband scanner) skipped per direction; M5
-(full duplex daemon) next; hardware verification of M3/M4/M5 deferred to
-a manual session.
+22 tests, 20 suites. M4 (wideband scanner) deferred. Hardware
+verification (real seify Sink/Source) deferred to M6.
 
 ## License
 
