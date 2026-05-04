@@ -201,6 +201,14 @@ async fn full_m1_loopback_to_python() -> Result<()> {
     assert_eq!(parsed["phy"]["sync_word"], 0x12);
     assert_eq!(parsed["carrier"]["sync_word"], 0x12);
     assert_eq!(parsed["decode_label"], "loopback");
+    let snr = parsed["phy"]["snr_db"]
+        .as_f64()
+        .expect("snr_db missing or non-numeric");
+    assert!(snr > 5.0, "loopback snr_db too low: {snr}");
+    let nf = parsed["phy"]["noise_floor_db"]
+        .as_f64()
+        .expect("noise_floor_db missing or non-numeric");
+    assert!(nf < 0.0, "loopback noise_floor_db looks suspicious: {nf}");
     let payload_b64 = parsed["payload"]
         .as_str()
         .expect("python encodes bytes as str via json default=str");

@@ -87,6 +87,7 @@ struct State {
     m_symb_numb: usize,          //<number of payload lora symbols
     m_received_head: bool, //< indicate that the header has be decoded and received by this block
     snr_est: f64,          //< estimate of the snr
+    noise_floor_est: f64,  //< per-bin noise power averaged over preamble (dB)
     in_down: Vec<Complex32>, //< downsampled input
     m_downchirp: Vec<Complex32>, //< Reference downchirp
     m_upchirp: Vec<Complex32>, //< Reference upchirp
@@ -221,7 +222,12 @@ impl State {
         k_residual - if k_residual > 0.5 { 1. } else { 0. }
     }
 
-    fn determine_snr(&self, samples: &[Complex32]) -> f64 {
+    /// Returns `(snr_db, noise_floor_db)` for one preamble symbol.
+    /// `noise_floor_db` is the per-bin noise power in dB
+    /// (`10 log10(noise_en / N_bins)`) — useful as an instantaneous
+    /// floor estimate against which `snr_db_td` can be derived
+    /// downstream.
+    fn determine_snr(&self, samples: &[Complex32]) -> (f64, f64) {
         // Multiply with ideal downchirp
         let mut dechirped = volk_32fc_x2_multiply_32fc(samples, &self.m_downchirp);
         // do the FFT
@@ -230,16 +236,18 @@ impl State {
         let fft_mag: Vec<f32> = dechirped.iter().map(|c| c.norm_sqr()).collect();
         let tot_en: f32 = fft_mag.iter().sum();
         if tot_en == 0. {
-            return f64::NAN;
+            return (f64::NAN, f64::NAN);
         }
         // Return argmax here
         let max_idx = argmax_f32(&fft_mag);
         let sig_en = fft_mag[max_idx];
         let noise_en = tot_en - sig_en;
         if noise_en == 0. {
-            return f64::INFINITY;
+            return (f64::INFINITY, f64::NEG_INFINITY);
         }
-        10.0 * (sig_en as f64 / noise_en as f64).log10()
+        let snr_db = 10.0 * (sig_en as f64 / noise_en as f64).log10();
+        let noise_floor_db = 10.0 * (noise_en as f64 / self.m_number_of_bins as f64).log10();
+        (snr_db, noise_floor_db)
     }
 
     fn cache_current_net_id(&mut self) {
@@ -472,12 +480,17 @@ impl State {
         corr_preamb = volk_32fc_x2_multiply_32fc(&corr_preamb, &sfo_corr_vect);
 
         self.snr_est = 0.0_f64;
+        self.noise_floor_est = 0.0_f64;
         for i in 0..self.up_symb_to_use {
-            self.snr_est += self.determine_snr(
+            let (snr_i, nf_i) = self.determine_snr(
                 &corr_preamb[(i * self.m_number_of_bins)..((i + 1) * self.m_number_of_bins)],
             );
+            self.snr_est += snr_i;
+            self.noise_floor_est += nf_i;
         }
-        self.snr_est /= self.up_symb_to_use as f64;
+        let n = self.up_symb_to_use as f64;
+        self.snr_est /= n;
+        self.noise_floor_est /= n;
 
         // update sto_frac to its value at the beginning of the net id
         self.m_sto_frac += self.sfo_hat * self.m_preamb_len as f32;
@@ -894,6 +907,7 @@ impl State {
             // frame_info.insert(String::from("cfo_int"), Pmt::Isize(self.m_cfo_int));
             // frame_info.insert(String::from("cfo_frac"), Pmt::F64(self.m_cfo_frac));
             frame_info.insert(String::from("snr"), Pmt::F64(self.snr_est));
+            frame_info.insert(String::from("noise_floor"), Pmt::F64(self.noise_floor_est));
             tags.add_tag(
                 0,
                 Tag::NamedAny(
@@ -1156,6 +1170,7 @@ where
                 m_symb_numb: 0,                //<number of payload lora symbols
                 m_received_head: false, //< indicate that the header has be decoded and received by this block
                 snr_est: 0.0,           //< estimate of the snr
+                noise_floor_est: 0.0,   //< per-bin noise power averaged over preamble (dB)
                 additional_upchirps: 0, //< indicate the number of additional upchirps found in preamble (in addition to the minimum required to trigger a detection)
                 m_cfo_frac: 0.0,        //< fractional part of CFO
                 sfo_hat: 0.0,           //< estimated sampling frequency offset
