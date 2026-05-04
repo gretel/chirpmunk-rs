@@ -33,6 +33,18 @@ pub struct Config {
     pub radios: std::collections::BTreeMap<String, RadioOrSection>,
     pub trx: Option<Trx>,
     pub scan: Option<Scan>,
+    #[serde(default)]
+    pub chirpmunk: ChirpmunkExt,
+}
+
+/// chirpmunk-only TOML section. Opaque to gr4-lora consumers; we add
+/// fields here when a feature has no analogue in the upstream schema.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ChirpmunkExt {
+    /// When true, build a TX→RX in-process loopback flowgraph instead
+    /// of opening a hardware device. Used by integration tests.
+    #[serde(default)]
+    pub loopback: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

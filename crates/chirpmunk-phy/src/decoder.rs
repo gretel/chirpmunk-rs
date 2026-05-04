@@ -48,8 +48,6 @@ impl Decoder {
             dewhitened.push((high_nib << 4) | low_nib);
         }
 
-        info!("..:: Decoder");
-
         let crc_passed = if frame.has_crc {
             let l = frame.nibbles.len();
             let low_nib = frame.nibbles[l - 4];
@@ -61,7 +59,7 @@ impl Decoder {
 
             let l = dewhitened.len();
             if l < 4 {
-                info!("crc check failed: payload length too small to compute crc");
+                debug!("crc check failed: payload length too small to compute crc");
                 false
             } else {
                 let mut crc = Self::crc16(&dewhitened[0..l - 4]);
@@ -72,10 +70,10 @@ impl Decoder {
                         == crc as i32;
                 mo.post("crc_check", Pmt::Bool(crc_valid)).await.unwrap();
                 if !crc_valid {
-                    info!("crc check failed");
+                    debug!("crc check failed");
                     false
                 } else {
-                    info!("crc check passed");
+                    debug!("crc check passed");
                     true
                 }
             }
@@ -103,12 +101,10 @@ impl Decoder {
             rftap[27..].copy_from_slice(&dewhitened);
             mo.post("rftap", Pmt::Blob(rftap.clone())).await.unwrap();
 
-            // let data = String::from_utf8_lossy(&dewhitened[..dewhitened.len() - 2]);
-            // info!("received frame: {}", data);
-            info!("DECODER received frame [bin]: {:02x?}", &dewhitened);
+            trace!("DECODER received frame [bin]: {:02x?}", &dewhitened);
             Some(dewhitened)
         } else {
-            info!("DECODER FAILED frame [bin]: {:02x?}", &dewhitened);
+            debug!("DECODER FAILED frame [bin]: {:02x?}", &dewhitened);
             None
         }
     }
