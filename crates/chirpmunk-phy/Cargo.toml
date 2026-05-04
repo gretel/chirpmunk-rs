@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "chirpmunk-phy"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "LoRa PHY primitives (CSS demod, decode chain, preamble sync)."
+
+[dependencies]
+futuredsp.workspace = true
+thiserror.workspace = true

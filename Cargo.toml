@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[workspace]
+resolver = "2"
+members = [
+    "crates/chirpmunk-cbor",
+    "crates/chirpmunk-config",
+    "crates/chirpmunk-udp",
+    "crates/chirpmunk-phy",
+    "crates/chirpmunk-blocks",
+    "apps/chirpmunk-trx",
+    "apps/chirpmunk-scan",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.89"
+license = "GPL-3.0-only"
+authors = ["Tom Hensel <code@jitter.eu>"]
+repository = "https://github.com/gretel/chirpmunk"
+
+[workspace.dependencies]
+futuresdr = { path = "../FutureSDR", features = ["seify", "soapy"] }
+futuredsp = { path = "../FutureSDR/crates/futuredsp" }
+chirpmunk-cbor   = { path = "crates/chirpmunk-cbor" }
+chirpmunk-config = { path = "crates/chirpmunk-config" }
+chirpmunk-udp    = { path = "crates/chirpmunk-udp" }
+chirpmunk-phy    = { path = "crates/chirpmunk-phy" }
+chirpmunk-blocks = { path = "crates/chirpmunk-blocks" }
+
+minicbor  = { version = "0.25", features = ["std", "derive"] }
+toml      = "0.9"
+tokio     = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
+tracing   = "0.1"
+thiserror = "2.0"
+clap      = { version = "4.5", features = ["derive"] }
+anyhow    = "1.0"
+serde     = { version = "1.0", features = ["derive"] }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+debug = true
+panic = "abort"
