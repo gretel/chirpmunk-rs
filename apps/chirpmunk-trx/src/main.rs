@@ -149,9 +149,28 @@ async fn main() -> Result<()> {
             None => bail!("config: [trx.transmit] section is required"),
         };
 
-    let sf = SpreadingFactor::try_from(sf_u8).map_err(|_| anyhow!("config: invalid sf {sf_u8}"))?;
-    let bw = Bandwidth::try_from(bw_u32).map_err(|_| anyhow!("config: invalid bw {bw_u32}"))?;
-    let cr = CodeRate::try_from(cr_u8).map_err(|_| anyhow!("config: invalid cr {cr_u8}"))?;
+    let sf = SpreadingFactor::try_from(sf_u8)
+        .map_err(|_| anyhow!("config: invalid [trx.transmit] sf={sf_u8}; expected 7..=12"))?;
+    let bw = Bandwidth::try_from(bw_u32).map_err(|_| {
+        anyhow!(
+            "config: invalid [trx.transmit] bw={bw_u32} Hz; expected one of 7800, 10400, 15600, 20800, 31200, 41700, 62500, 125000, 250000, 500000"
+        )
+    })?;
+    let cr_normalised = match cr_u8 {
+        1..=4 => cr_u8,
+        5..=8 => cr_u8 - 4,
+        _ => bail!(
+            "config: invalid [trx.transmit] cr={cr_u8}; expected 1..=4 (chirpmunk: numerator-1) or 5..=8 (gr4-lora: denominator)"
+        ),
+    };
+    let cr = CodeRate::try_from(cr_normalised).map_err(|_| {
+        anyhow!("config: invalid [trx.transmit] cr={cr_u8} (normalised {cr_normalised})")
+    })?;
+    if preamble_len_u < 6 {
+        bail!(
+            "config: invalid [trx.transmit] preamble_len={preamble_len_u}; LoRa requires >= 6 (typical 8 or 16)"
+        );
+    }
     let sync_word: SynchWord = SynchWord::from(sync_word_u8);
     let preamble_len = preamble_len_u as usize;
 
