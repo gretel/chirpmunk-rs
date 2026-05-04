@@ -273,13 +273,19 @@ behaviour first, fix only when problems reproduce.
 - [ ] Dual-channel: pattern is `build_multi_sf_rx` ×2 sharing a
       broadcaster. No dedicated test yet — proven by composition.
 
-### M3 — TX (single packet)
-- [ ] Port `algorithm/tx_chain.hpp` driver + chirp synthesis into a TX
-      block (chirpmunk-blocks::transmitter).
-- [ ] Ephemeral TX graph: TxQueueSource → transmitter → seify Sink.
-- [ ] CBOR `lora_tx` request → IQ → seify Sink → CBOR `lora_tx_ack`.
-- Acceptance: `lora.tools.meshcore_tx` sends frame; live RX (Heltec V3 or
-  loopback) decodes our pubkey. LBT deferred.
+### M3 — TX (single packet) (DONE — loopback variant)
+- [x] `chirpmunk-cbor::{LoraTx, LoraTxAck}` codecs, full schema parity
+      (payload, seq, cr, sync_word, preamble_len, repeat, gap_ms,
+      dry_run).
+- [x] `chirpmunk-blocks::dispatch_lora_tx` posts `Pmt::Blob` to a
+      running Flowgraph's Transmitter `msg` port; honours `repeat` /
+      `gap_ms`; respects `dry_run`; returns matching `lora_tx_ack`.
+- [x] Loopback: `lora_tx` CBOR → dispatch → TX → RX → FrameSink →
+      `lora_frame` with byte-equal payload.
+- [x] dry_run path: ack returned, no TX dispatched.
+- [ ] Hardware verification (live RX on Heltec V3) — manual session.
+- [ ] Ephemeral graph with seify Sink — needed at hardware time, not
+      for the loopback test.
 
 ### M4 — Wideband scanner (`lora_scan` parity)
 - [ ] `SpectrumTap` block (FFT energy snapshot).
