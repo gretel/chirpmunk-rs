@@ -106,9 +106,11 @@ async fn main() -> Result<()> {
             let path = default_config_path()
                 .ok_or_else(|| anyhow!("could not determine config path; pass --config"))?;
             if !path.exists() {
+                let parent = path.parent().unwrap_or(std::path::Path::new("."));
                 bail!(
-                    "no config at {}\n\nFirst run? Try one of:\n  chirpmunk-trx --loopback                 # standalone, no hardware\n  chirpmunk-trx --config <path>            # explicit config\n  cp apps/chirpmunk-trx/config.example.toml {}\n",
+                    "no config at {}\n\nFirst run? Try one of:\n  chirpmunk-trx --loopback                 # standalone, no hardware\n  chirpmunk-trx --config <path>            # explicit config\n  mkdir -p {} && cp apps/chirpmunk-trx/config.example.toml {}\n",
                     path.display(),
+                    parent.display(),
                     path.display(),
                 );
             }
