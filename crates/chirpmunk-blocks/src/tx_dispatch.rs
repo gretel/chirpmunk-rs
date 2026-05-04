@@ -22,22 +22,38 @@ pub async fn dispatch_lora_tx(
     req: &LoraTx,
 ) -> LoraTxAck {
     let seq = req.seq.unwrap_or(0);
+    let payload_len = req.payload.len();
+    let repeat_req = req.repeat.unwrap_or(1).max(1);
+    tracing::info!(
+        seq,
+        payload_len,
+        repeat = repeat_req,
+        dry_run = req.dry_run,
+        "lora_tx dispatch entry"
+    );
     if req.dry_run {
         return LoraTxAck::ok(seq);
     }
     if req.payload.is_empty() {
         return LoraTxAck::err(seq, "internal");
     }
-    let repeat = req.repeat.unwrap_or(1).max(1);
     let gap = Duration::from_millis(req.gap_ms.unwrap_or(0) as u64);
 
-    for i in 0..repeat {
+    for i in 0..repeat_req {
         let pmt = Pmt::Blob(req.payload.clone());
-        if let Err(e) = handle.post(transmitter, "msg", pmt).await {
-            tracing::warn!(error = %e, seq, "tx dispatch failed");
-            return LoraTxAck::err(seq, "internal");
+        match handle.post(transmitter, "msg", pmt).await {
+            Ok(()) => tracing::info!(
+                seq,
+                attempt = i + 1,
+                of = repeat_req,
+                "Pmt::Blob posted to Transmitter"
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, seq, "tx dispatch post failed");
+                return LoraTxAck::err(seq, "internal");
+            }
         }
-        if i + 1 < repeat && !gap.is_zero() {
+        if i + 1 < repeat_req && !gap.is_zero() {
             Timer::after(gap).await;
         }
     }

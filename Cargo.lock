@@ -378,6 +378,7 @@ dependencies = [
  "chrono",
  "futuresdr",
  "serde_json",
+ "soapysdr",
  "thiserror",
  "tokio",
  "tracing",

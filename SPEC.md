@@ -329,18 +329,130 @@ behaviour first, fix only when problems reproduce.
       250 kHz (BW 62.5 k × os 4) accepted, flowgraph runs clean.
 - [x] On-air decode: 4 MeshCore frames captured in a 30 s ambient
       listen, all CRC OK, SNR ~15 dB, sync 0x12 confirmed.
-- [ ] On-air `lora_tx` (transmit then verify on companion) — **NOT yet
-      validated**. 2026-05-04 hwtest run: chirpmunk-trx returned
-      `lora_tx_ack {ok=true}` for all 6 attempts (3 SF × ADVERT+TXT_MSG),
-      companion received 0/6, no SDR LED activity. **Root cause is
-      undetermined.** FutureSDR `examples/lora/bin/tx.rs` is known
-      working with the same `seify::Builder().build_sink()` path, so the
-      seify TX contract is sufficient — chirpmunk-trx must be wiring or
-      configuring it differently. Diff against `examples/lora/bin/tx.rs`
-      and `examples/lora/bin/loopback.rs` is the next step. Suspect
-      areas (unverified): TX sample rate vs Transmitter os_factor,
-      Sink port wiring (`inputs[0].tx_sink` syntax), TX gain scaling on
-      LibreSDR B220mini.
+- [x] On-air `lora_tx` — **TX path engages on hardware via the
+      chirpmunk-blocks `soapy_direct` integration.** 2026-05-04
+      diagnosis + integration:
+
+      | Layer | Test | Result |
+      |---|---|---|
+      | chirpmunk-trx (seify) | `lora hwtest tx --matrix basic` | 0/6, TXA dark, spectrum dark, UHD 'S'-storms |
+      | FutureSDR ref | `examples/lora/src/bin/tx.rs` SF8 BW62.5k 50 dB gain 2 s interval | 0 TXA blinks, spectrum dark, same 'S' storms |
+      | Pure UHD | `tx_waveforms --freq 869.618e6 --rate 1e6 --gain 50` | crashes with `LIBUSB_TRANSFER_ERROR` / `usb tx4 submit failed: LIBUSB_ERROR_NO_DEVICE` |
+      | gr4-lora | `lora hwtest tx --matrix basic` (after `uhd_usrp_probe --args reset`) | 1/6 pass — SF8 ADVERT received on Heltec V3 at SNR 15 dB |
+
+      Existence proof: gr4-lora drives the same LibreSDR_B220mini
+      clone (serial BADC10E) to emit RF that the companion decodes.
+      Chirpmunk via FutureSDR/seify drives the same hardware to emit
+      no RF. The hardware works; the FutureSDR/seify path doesn't.
+
+      Why: per the `sdrangel-dev` skill (`USRP TX architecture`
+      section), this clone's `tx_streamer::send` does not block at
+      wire rate. Naive continuous-stream TX → channel-FIFO underrun →
+      DAC starvation → USB transport corruption → `LIBUSB_ERROR_*`.
+      gr4-lora succeeds because `gr::blocks::sdr::SoapySink<cf32, 2>`
+      implements specific wrapping behaviors that seify does not:
+      - `num_channels=2` zero-fill on chan 1
+      - `master_clock_rate=24e6` explicit pin
+      - `timed_tx=true` (`SOAPY_SDR_HAS_TIME` on first sample)
+      - `wait_burst_ack=true` (END_BURST + `recv_async_msg` poll)
+      - `max_underflow_count=0` (fail-loud on first underflow)
+
+      seify 0.18 in FutureSDR 0.0.41-dev exposes none of these as
+      Sink configuration. The `tx_gap.md` skill's earlier "seify
+      abstracts these UHD-direct contracts" claim is **wrong** — it
+      doesn't abstract them, it omits them. Confirmed by source read
+      of `FutureSDR/src/blocks/seify/{builder.rs,sink.rs}`: the seify
+      Sink calls `tx_streamer.write(bufs, None, end_burst, 2_000_000)`
+      with no burst-ack poll, no underflow accounting, single-channel
+      only.
+
+      **Proof of TX path** (`tmp/soapy-tx-probe/`, 2026-05-04):
+      direct `soapysdr` crate, no seify, no FutureSDR. Five 200 ms
+      bursts at 869.618 MHz with a 100 kHz tone. Spectrum analyzer
+      observed five distinct peaks at the expected frequency. Zero
+      underflows, zero corruption events, zero crashes. Same
+      hardware that everything else failed on.
+
+      Resolution: implement the gr4-lora SoapySink wrapping pattern
+      as a chirpmunk-local TX block, calling the `soapysdr` crate
+      directly. seify cannot be used: its `TxStreamer` trait
+      exposes only `write` / `activate_at` / `deactivate`, none of
+      `read_status` / `recv_async_msg` / multi-channel buddy-share —
+      all of which are required on this hardware. Confirmed for
+      both seify 0.18 and HEAD/0.19 (commit `418f90e`).
+
+      Recipe (from `tmp/soapy-tx-probe/src/main.rs`):
+
+      1. **`master_clock_rate=24000000`** in device args:
+         `soapysdr::Device::new("driver=uhd,master_clock_rate=24000000")`
+      2. **TX stream on TWO channels**: `dev.tx_stream::<Complex32>(&[0, 1])`.
+         Channel 1 is fed continuous zero IQ at every write — this
+         activates the second DUC chain in the FPGA, which appears to
+         be required for the TX path to engage cleanly on this clone.
+      3. **Timed activation**: `dev.set_hardware_time(None, 0)` then
+         `tx.activate(Some(t_future_ns))` with `t_future_ns` ~100–200
+         ms ahead. Streamer holds in deferred state; host pre-fills
+         UHD's internal ring; UHD fires precisely on the future
+         timestamp.
+      4. **Tight write loop, no host pacing**:
+         `tx.write(&[real_iq, zero_iq], None, end_burst, 5_000_000)`
+         in chunks of `mtu.min(2040)`. UHD's internal ring is the
+         only backpressure source that works — `writeStream` blocks
+         via the timeout argument when full.
+      5. **End-of-burst flush**: `end_burst=true` on the last write,
+         then ~400 ms quiescence, then `tx.deactivate(None)`.
+
+      Scope: replace only the TX side of `chirpmunk-trx` hardware
+      mode. RX continues to use FutureSDR `seify::Source`. Open the
+      underlying USRP once via `soapysdr::Device::new` and run
+      both `rx_stream` and `tx_stream` on it.
+
+      No upstream patches to seify or FutureSDR. No external
+      runtime dependencies. New block: `chirpmunk-blocks::soapy_direct`
+      with `SoapyDirectSource` + `SoapyDirectSink`. Hardware mode in
+      `chirpmunk-trx` rewired to use them. Operator confirmed TXA
+      blink during a 5-burst manual test; `lora hwtest tx` runs
+      end-to-end without crash, `tx_ok=3/3` per matrix point, async
+      events bounded (~2 SEQ_ERR + 7 UNDERFLOW per 5-burst window).
+
+      Open: companion-decode (Heltec V3) currently 0/6 — RF reaches
+      the antenna but the companion does not decode. Likely
+      separate cause (payload framing, signal level, frequency
+      offset, Heltec config). Tracked as a M6 follow-up.
+
+      Code improvements that landed during this diagnosis (keep):
+      1. Shared `seify::Device` opening (Source + Sink from same
+         handle).
+      2. `min_in_buffer_size(sample_count(...))` on the TX Sink
+         builder for worst-case burst sizing — still applies if the
+         stock seify Sink is kept as a fallback target.
+      3. Diagnostic INFO logs in `dispatch_lora_tx`.
+
+      Methodology rule (from `sdrangel-dev`, internalised here):
+      **UHD ASYNC events ≠ RF emission.** A clean `BURST_ACK` only
+      proves FPGA TX FIFO drained; it does not prove the AD9361 PA
+      radiated. All TX claims require independent receiver
+      confirmation: spectrum analyzer marker at center freq with
+      time-correlation, OR companion `RX_LOG_DATA` with our
+      payload.
+
+      Code improvements that landed during this diagnosis (keep —
+      they make chirpmunk-trx match FutureSDR reference patterns;
+      independently correct regardless of TX outcome):
+      1. **Shared seify Device.** Single `SeifyDevice::from_args`
+         opening both Source and Sink via `Builder::from_device`.
+      2. **TX sink burst sizing** (`min_in_buffer_size(sample_count(...))`
+         for max payload 255 / LDRO worst-case).
+      3. **Diagnostic logs** in `dispatch_lora_tx` (seq, payload_len,
+         post status).
+
+      Methodology rule (from `sdrangel-dev`, internalised here):
+      **UHD ASYNC events ≠ RF emission.** A clean `BURST_ACK` only
+      proves FPGA TX FIFO drained; it does not prove the AD9361 PA
+      radiated. All TX claims require independent receiver
+      confirmation: spectrum analyzer marker at center freq with
+      time-correlation, OR companion `RX_LOG_DATA` with our
+      payload.
 - [ ] DC spur observation + mitigation (port `dc_blocker_cutoff` if
       needed; not blocking decode at present antenna position).
 - [ ] PlutoSDR / IIO direct path (deferred research).

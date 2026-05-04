@@ -20,6 +20,7 @@ tokio.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 uuid = { version = "1.10", features = ["v4"] }
 anyhow.workspace = true
+soapysdr = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "process", "io-util", "time"] }
