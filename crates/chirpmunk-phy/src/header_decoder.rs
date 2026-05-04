@@ -215,16 +215,13 @@ where
                     ^ (input[2] & 0b0010) >> 1
                     ^ (input[2] & 0b0001);
 
-                info!("..:: Header");
-                info!("Payload length: {}", payload_len);
-                info!("CRC presence:   {}", has_crc);
-                info!("Coding rate:    {}", code_rate_raw);
+                debug!(payload_len, has_crc, code_rate_raw, "header decoded");
 
                 let mut head_err = header_chk as i16
                     - ((c4 << 4) + (c3 << 3) + (c2 << 2) + (c1 << 1) + c0) as i16
                     != 0;
                 if head_err || payload_len == 0 {
-                    info!("Header checksum invalid!");
+                    debug!("Header checksum invalid!");
                     if head_err {
                         debug!("Header checksum invalid!");
                     }

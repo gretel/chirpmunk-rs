@@ -244,7 +244,7 @@ impl State {
 
     fn cache_current_net_id(&mut self) {
         if !self.known_valid_net_ids[self.net_id[0] as usize][self.net_id[1] as usize] {
-            info!(
+            debug!(
                 "caching new net id: [{}, {}]",
                 self.net_id[0], self.net_id[1]
             );
@@ -646,7 +646,7 @@ impl State {
                 self.frame_cnt += 1;
             }
         } else {
-            info!("detected syntactically correct net_id with matching offset {net_id_off}");
+            debug!("detected syntactically correct net_id with matching offset {net_id_off}");
             if self.net_id_caching_policy == NetIdCachingPolicy::Seen {
                 self.cache_current_net_id();
             }
@@ -657,14 +657,14 @@ impl State {
             items_to_consume += -(self.m_os_factor as isize) * net_id_off as isize;
             self.frame_cnt += 1;
             if !self.known_valid_net_ids[self.net_id[0] as usize][self.net_id[1] as usize] {
-                info!(
+                debug!(
                     "encountered new net id: [{}, {}], trying to decode header...",
                     self.net_id[0], self.net_id[1]
                 );
             }
         }
-        info!("SNR: {}dB", self.snr_est);
-        info!("Net-ID: [{}, {}]", self.net_id[0], self.net_id[1]);
+        debug!("SNR: {}dB", self.snr_est);
+        debug!("Net-ID: [{}, {}]", self.net_id[0], self.net_id[1]);
         // net IDs syntactically correct and matching offset => frame detected, proceed with trying to decode the header
         self.m_received_head = false;
         // consume the quarter downchirp, and at the same time correct CFOint (already applied correction for NET_ID recovery was only in retrospect on a local buffer)
@@ -1241,7 +1241,7 @@ where
                 if crc_valid {
                     self.s.cache_current_net_id();
                 } else {
-                    info!(
+                    debug!(
                         "failed to decode payload for netid [{}, {}], dropping.",
                         self.s.net_id[0], self.s.net_id[1]
                     );

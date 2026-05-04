@@ -124,6 +124,18 @@ impl FrameSink {
     async fn emit(&mut self, payload: Vec<u8>, telemetry: Telemetry) -> Result<Pmt> {
         self.seq = self.seq.wrapping_add(1);
         let frame = self.build_frame(payload, telemetry);
+        tracing::info!(
+            seq = frame.seq,
+            sf = frame.phy.sf,
+            bw = frame.phy.bw,
+            sync = format_args!("0x{:02x}", frame.phy.sync_word),
+            cr = frame.cr,
+            crc = if frame.crc_valid { "ok" } else { "bad" },
+            len = frame.payload_len,
+            snr_db = frame.phy.snr_db,
+            label = frame.decode_label.as_deref().unwrap_or(""),
+            "frame"
+        );
         let buf = chirpmunk_cbor::to_vec(&frame)
             .map_err(|e| futuresdr::runtime::Error::RuntimeError(e.to_string()))?;
         if self.tx.send((buf, self.cfg.sync_word)).is_err() {
