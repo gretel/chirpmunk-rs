@@ -249,12 +249,17 @@ behaviour first, fix only when problems reproduce.
       `Decoder.out_annotated`, ships CBOR over mpsc.
 - [x] Loopback acceptance: `tx_to_framesink_decodes_payload` round-trips
       a payload through the full TX→RX pipeline.
+- [x] IQ replay acceptance: `replay_sf7_cr1_bw125_decodes_hello_meshcore`
+      decodes the canonical `gr4-lora/test_vectors/sf7_cr1_bw125000`
+      capture and matches `payload == "Hello MeshCore"`.
 - [x] Python parity acceptance: `full_m1_loopback_to_python` proves the
       Rust-emitted CBOR `lora_frame` is consumed correctly by Python
       `cbor2` over UDP after a Subscribe handshake.
-- [ ] `chirpmunk-trx` binary CLI (deferred to M2 — first hardware spike).
-- [ ] Telemetry tags (snr/cfo/sfo) — phy emits them; FrameSink only reads
-      `snr_db` so far. Extend in M2.
+- [x] Telemetry: FrameSink reads snr_db, noise_floor_db, peak_db,
+      snr_db_td, channel_freq, decode_bw, cfo_int, cfo_frac, sfo_hat,
+      sample_rate, frequency_corrected, ppm_error from upstream
+      annotations.
+- [ ] `chirpmunk-trx` binary CLI (deferred — first real hardware spike).
 - License review gate: GPL-3.0-only confirmed for now (PHY copied from
   FutureSDR `examples/lora`).
 

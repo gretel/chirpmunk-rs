@@ -10,9 +10,10 @@ for the upstream reverse-engineering notes.
 
 ## Status
 
-M3 done. CBOR `lora_tx` requests dispatched to the Flowgraph
-Transmitter; loopback verifies payload round-trip and `lora_tx_ack`
-return.
+M0..M3 done. IQ replay decodes the canonical
+`gr4-lora/test_vectors/sf7_cr1_bw125000` capture (payload
+`Hello MeshCore`). Loopback proves TX→RX→FrameSink→CBOR→UDP→Python.
+CBOR `lora_tx` drives dispatch and returns `lora_tx_ack`.
 
 ```
 cargo build --workspace
@@ -21,8 +22,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-20 tests, 18 suites. M4 (wideband scanner) next; hardware verification
-of M3 deferred to a manual session.
+21 tests, 19 suites. M4 (wideband scanner) skipped per direction; M5
+(full duplex daemon) next; hardware verification of M3/M4/M5 deferred to
+a manual session.
 
 ## License
 
