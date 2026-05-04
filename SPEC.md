@@ -300,11 +300,21 @@ behaviour first, fix only when problems reproduce.
 - Acceptance: 16 MS/s sweep on B210 → `lora.viz.waterfall` renders;
   `lora.hwtests.scan_test` passes.
 
-### M5 — Full duplex
-- [ ] RX continuous + TX worker concurrent.
-- [ ] Daemon supervisor (process-level, mirrors gr4-lora pattern).
-- Acceptance: hwtest matrix (`lora.hwtests.matrix`) passes 1-channel and
-  2-channel modes; bridge_live test green.
+### M5 — Full duplex (DONE — loopback variant)
+- [x] `chirpmunk-udp::Server::bind_with_inbound` forwards non-subscribe
+      datagrams via mpsc to the application; `Server::send_to` provides
+      unicast for ack delivery.
+- [x] `chirpmunk-trx` binary: clap CLI (`--bind`, `--loopback`),
+      tracing-subscriber init, tokio multi-thread runtime. Spawns
+      Server::run, FrameSink broadcaster, lora_tx dispatcher; builds
+      single-SF TX→loopback→RX flowgraph; SIGINT shutdown.
+- [x] End-to-end test
+      (`apps/chirpmunk-trx/tests/daemon_loopback.rs`): spawns the binary
+      as a subprocess, Python `cbor2` subscribes, sends `lora_tx`,
+      receives back `lora_frame` and `lora_tx_ack`.
+- [ ] Daemon supervisor (process-level): SIGINT handled; richer
+      lifecycle deferred.
+- [ ] Hardware: real seify Sink + Source paths (M6 deferred research).
 
 ### M6 — Hardware portability (deferred research)
 - [ ] Add second hardware target (PlutoSDR via seify, or other).

@@ -444,11 +444,14 @@ dependencies = [
  "chirpmunk-blocks",
  "chirpmunk-cbor",
  "chirpmunk-config",
+ "chirpmunk-phy",
  "chirpmunk-udp",
  "clap",
  "futuresdr",
+ "serde_json",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
