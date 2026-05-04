@@ -2,16 +2,17 @@
 
 //! chirpmunk-trx: full-duplex LoRa transceiver daemon.
 //!
-//! Wires:
+//! Two modes:
 //!
-//!   * `chirpmunk-udp::Server` — subscribe registry + CBOR broadcaster
-//!     + inbound `lora_tx` forwarder.
-//!   * FutureSDR Flowgraph — single-SF TX → loopback → RX (`--loopback`)
-//!     or TX → seify Sink / seify Source → RX (deferred, M6 hardware).
-//!   * `chirpmunk-blocks::FrameSink` — per-decode CBOR `lora_frame`
-//!     producer; the broadcaster fans them out.
-//!   * `chirpmunk-blocks::dispatch_lora_tx` — inbound `lora_tx` request
-//!     dispatcher; replies with `lora_tx_ack` to the originator.
+//!   * `--loopback` — TX block routed back into RX inside the
+//!     flowgraph; no hardware required. Used by integration tests.
+//!   * (default) — hardware path: seify::Source feeds the RX chain,
+//!     TX block writes into seify::Sink. UHD/Soapy backends.
+//!
+//! Wires (UDP plane, both modes): `chirpmunk-udp::Server` for
+//! subscribe + broadcast + inbound `lora_tx`, `chirpmunk-blocks::FrameSink`
+//! for per-decode CBOR `lora_frame`, `chirpmunk-blocks::dispatch_lora_tx`
+//! for the inbound dispatcher with `lora_tx_ack` reply.
 
 use std::net::SocketAddr;
 
@@ -25,6 +26,7 @@ use chirpmunk_phy::utils::{
 use chirpmunk_phy::{build_lora_rx_soft_decoding, build_lora_tx};
 use chirpmunk_udp::Server;
 use clap::Parser;
+use futuresdr::blocks::seify::Builder as SeifyBuilder;
 use futuresdr::prelude::*;
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::{error, info, warn};
@@ -32,6 +34,7 @@ use tracing_subscriber::EnvFilter;
 
 const PAD: usize = 10_000;
 const SF: SpreadingFactor = SpreadingFactor::SF7;
+const BW_HZ: f64 = 125_000.0;
 
 #[derive(Parser, Debug)]
 #[clap(version, about = "chirpmunk full-duplex LoRa transceiver daemon")]
@@ -40,10 +43,32 @@ struct Args {
     #[clap(long, default_value = "127.0.0.1:5556")]
     bind: SocketAddr,
     /// Loopback mode: TX block routed straight back into RX without
-    /// hardware. Without this flag the daemon will refuse to start
-    /// (hardware path not yet implemented).
+    /// hardware. Without this flag the daemon uses seify (UHD/Soapy)
+    /// for both TX and RX.
     #[clap(long)]
     loopback: bool,
+    /// seify device args. E.g. "driver=uhd" or
+    /// "driver=uhd,serial=BADC10E". Ignored in loopback mode.
+    #[clap(long, default_value = "driver=uhd")]
+    device_args: String,
+    /// Carrier centre frequency in Hz.
+    #[clap(long, default_value_t = 869_618_000.0)]
+    freq: f64,
+    /// RX gain in dB.
+    #[clap(long, default_value_t = 60.0)]
+    rx_gain: f64,
+    /// TX gain in dB. Default 0 = minimum power.
+    #[clap(long, default_value_t = 0.0)]
+    tx_gain: f64,
+    /// Oversampling factor. Sample rate = BW × os_factor.
+    #[clap(long, default_value_t = 4)]
+    os_factor: usize,
+    /// RX antenna name (driver-specific, e.g. "RX2", "TX/RX", "A").
+    #[clap(long)]
+    rx_antenna: Option<String>,
+    /// TX antenna name (driver-specific).
+    #[clap(long)]
+    tx_antenna: Option<String>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -54,9 +79,6 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    if !args.loopback {
-        anyhow::bail!("only --loopback mode is implemented in M5; hardware path is M6");
-    }
     info!(?args, "starting chirpmunk-trx");
 
     let (server, mut inbound_rx) = Server::bind_with_inbound(args.bind)
@@ -95,7 +117,7 @@ async fn main() -> Result<()> {
         HAS_CRC,
         LdroMode::AUTO,
         HeaderMode::Explicit,
-        1,
+        args.os_factor,
         SynchWord::Private,
         Some(PREAMBLE_LEN),
         PAD,
@@ -108,26 +130,74 @@ async fn main() -> Result<()> {
         HeaderMode::Explicit,
         LdroMode::AUTO,
         Some(&[SynchWord::Private]),
-        1,
+        args.os_factor,
         None,
         None,
         false,
         None,
     )?;
+
     let cfg = FrameSinkConfig {
         sf: 7,
         bw: 125_000,
         cr: 4,
         sync_word: 0x12,
-        device: Some("chirpmunk-trx-loopback".into()),
-        decode_label: Some("loopback".into()),
+        device: Some(if args.loopback {
+            "chirpmunk-trx-loopback".into()
+        } else {
+            args.device_args.clone()
+        }),
+        decode_label: Some(if args.loopback {
+            "loopback".into()
+        } else {
+            "hardware".into()
+        }),
         rx_channel: Some(0),
     };
     let frame_sink = fg.add(FrameSink::new(cfg, cbor_tx));
-    connect!(fg,
-        transmitter > frame_sync;
-        decoder.out_annotated | frame_sink;
-    );
+
+    if args.loopback {
+        connect!(fg,
+            transmitter > frame_sync;
+            decoder.out_annotated | frame_sink;
+        );
+    } else {
+        let sample_rate = BW_HZ * args.os_factor as f64;
+        info!(
+            device_args = %args.device_args,
+            freq = args.freq,
+            sample_rate,
+            rx_gain = args.rx_gain,
+            tx_gain = args.tx_gain,
+            "building seify source + sink"
+        );
+
+        let mut rx_builder = SeifyBuilder::new(args.device_args.as_str())
+            .context("parse seify device args")?
+            .frequency(args.freq)
+            .sample_rate(sample_rate)
+            .gain(args.rx_gain);
+        if let Some(ant) = &args.rx_antenna {
+            rx_builder = rx_builder.antenna(ant.as_str());
+        }
+        let rx_source = rx_builder.build_source().context("build seify source")?;
+
+        let mut tx_builder = SeifyBuilder::new(args.device_args.as_str())
+            .context("parse seify device args")?
+            .frequency(args.freq)
+            .sample_rate(sample_rate)
+            .gain(args.tx_gain);
+        if let Some(ant) = &args.tx_antenna {
+            tx_builder = tx_builder.antenna(ant.as_str());
+        }
+        let tx_sink = tx_builder.build_sink().context("build seify sink")?;
+
+        connect!(fg,
+            rx_source.outputs[0] > frame_sync;
+            transmitter > inputs[0].tx_sink;
+            decoder.out_annotated | frame_sink;
+        );
+    }
 
     let transmitter_id: BlockId = transmitter.into();
     let runtime = Runtime::new();

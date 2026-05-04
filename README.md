@@ -10,21 +10,24 @@ for the upstream reverse-engineering notes.
 
 ## Status
 
-M0..M5 done (loopback). `chirpmunk-trx --loopback` runs as a daemon:
-binds UDP, accepts subscribe, dispatches incoming `lora_tx` requests
-through the flowgraph, broadcasts `lora_frame` events back, replies with
-`lora_tx_ack`. End-to-end Python parity test spawns the binary and
-validates the round-trip.
+M0..M5 done (loopback). M6 hardware bring-up: USRP B210/B220 boots
+cleanly through `chirpmunk-trx --device-args 'soapy_driver=uhd'`,
+flowgraph runs without errors. On-air decode against a LoRa
+companion is the remaining hardware acceptance criterion.
 
 ```
 cargo build --workspace
 cargo test  --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
+
+# Hardware bring-up
+./target/debug/chirpmunk-trx \
+    --device-args 'soapy_driver=uhd' \
+    --bind 127.0.0.1:5556
 ```
 
-22 tests, 20 suites. M4 (wideband scanner) deferred. Hardware
-verification (real seify Sink/Source) deferred to M6.
+22 tests, 20 suites. M4 (wideband scanner) deferred. M6 in progress.
 
 ## License
 

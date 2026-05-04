@@ -316,12 +316,22 @@ behaviour first, fix only when problems reproduce.
       lifecycle deferred.
 - [ ] Hardware: real seify Sink + Source paths (M6 deferred research).
 
-### M6 — Hardware portability (deferred research)
-- [ ] Add second hardware target (PlutoSDR via seify, or other).
-- [ ] DC spur observation; mitigation if needed.
-- [ ] LBT (Listen-Before-Talk) if hardware contention demands it.
-- [ ] IIO direct path or tezuka_fw armv7 cross-build if edge deploy is needed.
-- Acceptance: per sub-task as scoped at the time.
+### M6 — Hardware bring-up (IN PROGRESS)
+- [x] `chirpmunk-trx` hardware mode: seify Source + Sink wired into the
+      flowgraph (`--device-args 'soapy_driver=uhd'`, `--freq`, `--rx-gain`,
+      `--tx-gain`, `--os-factor`, optional `--rx-antenna` / `--tx-antenna`).
+      `--loopback` retained for software CI.
+- [x] LibreSDR B220 Mini (B210 product) bring-up via UHD: FPGA loads,
+      register loopback passes, master clock auto-set to 32 MHz,
+      sample rate 500 kHz (BW 125 k × os 4) accepted, flowgraph runs
+      clean for 22 s with no errors. Daemon shuts down gracefully on
+      SIGINT.
+- [ ] On-air `lora_tx` decode against companion (Heltec V3 / RAK4631).
+- [ ] DC spur observation + mitigation (likely needed; gr4-lora found
+      `dc_blocker_cutoff = 2 kHz` at zero-IF).
+- [ ] PlutoSDR / IIO direct path (deferred research).
+- [ ] LBT (Listen-Before-Talk) — only if contention measured.
+- [ ] tezuka_fw armv7 cross-build (deferred research).
 
 ## Test strategy
 
