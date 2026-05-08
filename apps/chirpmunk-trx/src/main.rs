@@ -273,7 +273,7 @@ async fn main() -> Result<()> {
     let dedup = DedupState::from_window_ms(dedup_window_ms, cbor_tx);
     info!(dedup_window_ms, "dedup state");
 
-    let cfg_sink = FrameSinkConfig {
+    let cfg_sink_template = FrameSinkConfig {
         sf: u8::from(sf),
         bw: bw_hz,
         cr: u8::from(cr),
@@ -289,7 +289,7 @@ async fn main() -> Result<()> {
         ),
         rx_channel: Some(0),
     };
-    let frame_sink = fg.add(FrameSink::new(cfg_sink, dedup.clone()));
+    let frame_sink = fg.add(FrameSink::new(cfg_sink_template.clone(), dedup.clone()));
 
     // CAD busy flag — writer = ChannelActivityDetector, reader = LBT poll
     // in dispatch_lora_tx.
@@ -325,11 +325,22 @@ async fn main() -> Result<()> {
             .ok_or_else(|| anyhow!("hardware mode requires [trx] in config"))?;
         let radio = pick_radio(cfg, &trx.radio)?;
 
+        // RX chain count = number of antennas to decode in parallel.
+        // Empty `rx_channel` defaults to single-chain RX on chan 0.
+        let rx_chain_count = radio.rx_channel.len().max(1);
+        if cfg.device.driver == "plutoPAPR" && rx_chain_count > 1 {
+            bail!("PlutoSDR has 1 RX channel; [radio_*] rx_channel must be [0] or empty");
+        }
+        if rx_chain_count > 2 {
+            bail!("[radio_*] rx_channel.len()={rx_chain_count} unsupported (max 2 for B210/B220)");
+        }
+
         info!(
             device_args = %device_label,
             freq = radio.freq,
             rx_gain = radio.rx_gain,
             tx_gain = radio.tx_gain,
+            rx_chain_count,
             "opening soapy direct device"
         );
 
@@ -362,19 +373,56 @@ async fn main() -> Result<()> {
 
         let rx_source = fg.add(SoapyDirectSource::new(dev.clone(), rx_cfg));
         let tx_sink = fg.add(SoapyDirectSink::new(dev.clone(), tx_cfg));
-        // Diversity-RX wiring lands in a follow-up; v1 sinks the
-        // second RX channel so the kernel keeps draining both
-        // channels in lockstep (B210 channel-symmetry requirement).
-        let rx_chan1_null = fg.add(NullSink::<Complex32>::new());
 
-        connect!(fg,
-            rx_source.out0 > entry_dup;
-            rx_source.out1 > rx_chan1_null;
-            entry_dup.outputs[0] > frame_sync;
-            entry_dup.outputs[1] > cad_id;
-            transmitter > tx_sink;
-            decoder.out_annotated | frame_sink;
-        );
+        if rx_chain_count == 2 {
+            // Diversity RX: chain 1 gets its own (frame_sync, decoder,
+            // frame_sink) pair; both FrameSinks share the dedup state
+            // so identical decodes within `dedup_window_ms` collapse
+            // into one emitted lora_frame with merged phy.diversity.
+            // CAD stays on chain 0 only — single LBT decision point
+            // for the radio.
+            let (frame_sync_1, decoder_1) = build_lora_rx_soft_decoding(
+                &mut fg,
+                Channel::EU868_1,
+                bw,
+                sf,
+                HeaderMode::Explicit,
+                LdroMode::AUTO,
+                Some(&[sync_word]),
+                os_factor,
+                Some(preamble_len),
+                None,
+                false,
+                None,
+            )?;
+            let mut cfg1 = cfg_sink_template.clone();
+            cfg1.rx_channel = Some(1);
+            cfg1.decode_label = Some("hardware-chan1".into());
+            let frame_sink_1 = fg.add(FrameSink::new(cfg1, dedup.clone()));
+
+            connect!(fg,
+                rx_source.out0 > entry_dup;
+                rx_source.out1 > frame_sync_1;
+                entry_dup.outputs[0] > frame_sync;
+                entry_dup.outputs[1] > cad_id;
+                transmitter > tx_sink;
+                decoder.out_annotated | frame_sink;
+                decoder_1.out_annotated | frame_sink_1;
+            );
+        } else {
+            // Single-chain RX. Channel 1 is still opened on the
+            // hardware (B200 symmetry rule) so we sink its IQ to
+            // keep the streamer draining both channels in lockstep.
+            let rx_chan1_null = fg.add(NullSink::<Complex32>::new());
+            connect!(fg,
+                rx_source.out0 > entry_dup;
+                rx_source.out1 > rx_chan1_null;
+                entry_dup.outputs[0] > frame_sync;
+                entry_dup.outputs[1] > cad_id;
+                transmitter > tx_sink;
+                decoder.out_annotated | frame_sink;
+            );
+        }
     }
 
     // Build LBT policy from [trx.network] (gr4-lora layout). When the
