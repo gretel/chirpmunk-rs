@@ -37,7 +37,10 @@ use chirpmunk_phy::utils::{
 use chirpmunk_phy::{build_lora_rx_soft_decoding, build_lora_tx};
 use chirpmunk_udp::Server;
 use clap::Parser;
-use futuresdr::blocks::{NullSink, StreamDuplicator};
+use futuresdr::blocks::{
+    Apply, Fft, FftDirection, MovingAvg, NullSink, StreamDuplicator, WebsocketSinkBuilder,
+    WebsocketSinkMode,
+};
 use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
 use tokio::sync::mpsc::unbounded_channel;
@@ -305,7 +308,10 @@ async fn main() -> Result<()> {
     let cad_block =
         ChannelActivityDetector::new(u8::from(sf), os_factor as u32, cad_release, busy.clone())
             .with_alpha(cad_alpha);
-    let entry_dup = fg.add(StreamDuplicator::<Complex32, 2>::new());
+    // Three outputs: [0] frame_sync, [1] CAD, [2] spectrum tap (FFT
+    // → magnitude → moving-avg → WebsocketSink) when [trx.spectrum]
+    // enabled, else NullSink to keep the duplicator drained.
+    let entry_dup = fg.add(StreamDuplicator::<Complex32, 3>::new());
     let cad_id = fg.add(cad_block);
 
     if want_loopback {
@@ -423,6 +429,40 @@ async fn main() -> Result<()> {
                 decoder.out_annotated | frame_sink;
             );
         }
+    }
+
+    // Spectrum tap on entry_dup.outputs[2]. When [trx.spectrum] is
+    // enabled, drive an FFT → |x|² → moving-avg → WebsocketSink chain
+    // so the prophecy-based frontend can render a live waterfall.
+    // When disabled, sink the third duplicator output into a NullSink
+    // so backpressure on the duplicator stays drained.
+    const SPECTRUM_FFT_SIZE: usize = 2048;
+    let spectrum_cfg = trx_opt.and_then(|t| t.spectrum.as_ref());
+    let spectrum_enabled = spectrum_cfg.map(|s| s.enabled).unwrap_or(false);
+    let spectrum_ws_port = spectrum_cfg.map(|s| s.ws_port).unwrap_or(9001);
+    if spectrum_enabled {
+        let fft = fg.add(Fft::with_options(
+            SPECTRUM_FFT_SIZE,
+            FftDirection::Forward,
+            true,
+            None,
+        ));
+        let mag_sqr = fg.add(Apply::new(|x: &Complex32| x.norm_sqr()));
+        let avg = fg.add(MovingAvg::<SPECTRUM_FFT_SIZE>::new(0.1, 3));
+        let snk = fg.add(
+            WebsocketSinkBuilder::<f32>::new(spectrum_ws_port.into())
+                .mode(WebsocketSinkMode::FixedBlocking(SPECTRUM_FFT_SIZE))
+                .build(),
+        );
+        connect!(fg, entry_dup.outputs[2] > fft > mag_sqr > avg > snk;);
+        info!(
+            ws_port = spectrum_ws_port,
+            fft_size = SPECTRUM_FFT_SIZE,
+            "spectrum tap enabled"
+        );
+    } else {
+        let null = fg.add(NullSink::<Complex32>::new());
+        connect!(fg, entry_dup.outputs[2] > null;);
     }
 
     // Build LBT policy from [trx.network] (gr4-lora layout). When the
