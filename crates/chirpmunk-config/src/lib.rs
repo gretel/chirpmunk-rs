@@ -136,6 +136,13 @@ pub struct TrxReceive {
     /// before the busy flag is cleared. Default 4.
     #[serde(default)]
     pub cad_release_symbols: Option<u8>,
+    /// Frame-level dedup window in ms across diversity RX chains.
+    /// Identical `(payload_hash, sync, sf, bw)` arrivals inside this
+    /// window collapse into one emitted `lora_frame` carrying the
+    /// merged `phy.diversity` metadata. `None` or `0` disables dedup
+    /// (every decode emits independently).
+    #[serde(default)]
+    pub dedup_window_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
