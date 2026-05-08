@@ -6,11 +6,13 @@
 
 pub mod cad;
 pub mod frame_sink;
+pub mod multi_bw;
 pub mod multi_sf;
 pub mod soapy_direct;
 pub mod tx_dispatch;
 pub use cad::{ChannelActivityDetector, Detector, StreamingDetector, default_alpha};
 pub use frame_sink::{FrameSink, FrameSinkConfig, Outbound};
+pub use multi_bw::{MAX_BW, MultiBwRx, build_multi_bw_rx};
 pub use multi_sf::{ALL_SF, MultiSfRx, build_multi_sf_rx};
 pub use soapy_direct::{
     SoapyDirectSink, SoapyDirectSource, SoapyRxConfig, SoapyTxConfig, open_device,
