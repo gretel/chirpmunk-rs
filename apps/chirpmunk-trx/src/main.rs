@@ -19,11 +19,14 @@
 //! for the inbound dispatcher with `lora_tx_ack` reply.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chirpmunk_blocks::{
-    FrameSink, FrameSinkConfig, SoapyDirectSink, SoapyDirectSource, SoapyRxConfig, SoapyTxConfig,
-    dispatch_lora_tx, open_device,
+    ChannelActivityDetector, FrameSink, FrameSinkConfig, LbtPolicy, SoapyDirectSink,
+    SoapyDirectSource, SoapyRxConfig, SoapyTxConfig, default_alpha, dispatch_lora_tx, open_device,
 };
 use chirpmunk_cbor::LoraTx;
 use chirpmunk_config::{Config, Radio, RadioOrSection};
@@ -34,6 +37,8 @@ use chirpmunk_phy::utils::{
 use chirpmunk_phy::{build_lora_rx_soft_decoding, build_lora_tx};
 use chirpmunk_udp::Server;
 use clap::Parser;
+use futuresdr::blocks::StreamDuplicator;
+use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::{error, info, warn};
@@ -279,9 +284,28 @@ async fn main() -> Result<()> {
     };
     let frame_sink = fg.add(FrameSink::new(cfg_sink, cbor_tx));
 
+    // CAD busy flag — writer = ChannelActivityDetector, reader = LBT poll
+    // in dispatch_lora_tx.
+    let busy = Arc::new(AtomicBool::new(false));
+    let cad_alpha = trx_opt
+        .and_then(|t| t.receive.as_ref())
+        .and_then(|r| r.cad_min_ratio)
+        .unwrap_or_else(|| default_alpha(u8::from(sf), os_factor as u32));
+    let cad_release = trx_opt
+        .and_then(|t| t.receive.as_ref())
+        .and_then(|r| r.cad_release_symbols)
+        .unwrap_or(4);
+    let cad_block =
+        ChannelActivityDetector::new(u8::from(sf), os_factor as u32, cad_release, busy.clone())
+            .with_alpha(cad_alpha);
+    let entry_dup = fg.add(StreamDuplicator::<Complex32, 2>::new());
+    let cad_id = fg.add(cad_block);
+
     if want_loopback {
         connect!(fg,
-            transmitter > frame_sync;
+            transmitter > entry_dup;
+            entry_dup.outputs[0] > frame_sync;
+            entry_dup.outputs[1] > cad_id;
             decoder.out_annotated | frame_sink;
         );
     } else {
@@ -334,11 +358,38 @@ async fn main() -> Result<()> {
         let tx_sink = fg.add(SoapyDirectSink::new(dev.clone(), tx_cfg));
 
         connect!(fg,
-            rx_source > frame_sync;
+            rx_source > entry_dup;
+            entry_dup.outputs[0] > frame_sync;
+            entry_dup.outputs[1] > cad_id;
             transmitter > tx_sink;
             decoder.out_annotated | frame_sink;
         );
     }
+
+    // Build LBT policy from [trx.network] (gr4-lora layout). When the
+    // network section is absent and we are in loopback, default LBT on
+    // for testability; otherwise off.
+    let (lbt_enabled, lbt_timeout_ms_raw) = net_cfg_opt
+        .map(|n| (n.lbt, n.lbt_timeout_ms))
+        .unwrap_or((want_loopback, 2000));
+    let lbt_timeout_ms = if lbt_timeout_ms_raw == 0 {
+        2000
+    } else {
+        lbt_timeout_ms_raw
+    };
+    let policy = if lbt_enabled {
+        Some(LbtPolicy {
+            busy: busy.clone(),
+            timeout: Duration::from_millis(lbt_timeout_ms as u64),
+            poll_interval: Duration::from_millis(10),
+        })
+    } else {
+        None
+    };
+    info!(
+        lbt = policy.is_some(),
+        lbt_timeout_ms, cad_alpha, cad_release, "LBT policy"
+    );
 
     let transmitter_id: BlockId = transmitter.into();
     let runtime = Runtime::new();
@@ -348,6 +399,7 @@ async fn main() -> Result<()> {
     {
         let handle = handle.clone();
         let server = server.clone();
+        let policy = policy.clone();
         tokio::spawn(async move {
             while let Some((peer, bytes)) = inbound_rx.recv().await {
                 let req = match LoraTx::from_slice(&bytes) {
@@ -357,7 +409,7 @@ async fn main() -> Result<()> {
                         continue;
                     }
                 };
-                let ack = dispatch_lora_tx(&handle, transmitter_id, &req, None).await;
+                let ack = dispatch_lora_tx(&handle, transmitter_id, &req, policy.as_ref()).await;
                 match chirpmunk_cbor::to_vec(&ack) {
                     Ok(buf) => {
                         if let Err(e) = server.send_to(&buf, peer).await {
