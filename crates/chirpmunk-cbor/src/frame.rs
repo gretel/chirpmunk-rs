@@ -29,6 +29,18 @@ pub struct Phy {
     pub sample_rate: Option<f64>,
     pub frequency_corrected: Option<f64>,
     pub ppm_error: Option<f64>,
+    pub diversity: Option<Diversity>,
+}
+
+/// Selection-diversity metadata: when the same `(payload, sync, sf, bw)`
+/// arrives on multiple RX chains within `dedup_window_ms`, the merged
+/// `lora_frame` carries this map so downstream consumers can tell which
+/// antennas contributed and at what SNR.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Diversity {
+    pub antennas: Vec<u8>,
+    pub snr_db_max: f64,
+    pub snr_db_per_ant: Vec<f64>,
 }
 
 /// Carrier configuration the decoder used.
@@ -195,6 +207,7 @@ fn encode_phy<W: Write>(
         ("sample_rate", p.sample_rate.is_some()),
         ("frequency_corrected", p.frequency_corrected.is_some()),
         ("ppm_error", p.ppm_error.is_some()),
+        ("diversity", p.diversity.is_some()),
     ];
     for (_, present) in opts {
         if *present {
@@ -241,7 +254,71 @@ fn encode_phy<W: Write>(
     if let Some(v) = p.ppm_error {
         e.str("ppm_error")?.f64(v)?;
     }
+    if let Some(d) = &p.diversity {
+        e.str("diversity")?;
+        encode_diversity(e, d)?;
+    }
     Ok(())
+}
+
+fn encode_diversity<W: Write>(
+    e: &mut Encoder<W>,
+    d: &Diversity,
+) -> core::result::Result<(), minicbor::encode::Error<W::Error>> {
+    e.map(3)?;
+    e.str("antennas")?;
+    e.array(d.antennas.len() as u64)?;
+    for a in &d.antennas {
+        e.u8(*a)?;
+    }
+    e.str("snr_db_max")?.f64(d.snr_db_max)?;
+    e.str("snr_db_per_ant")?;
+    e.array(d.snr_db_per_ant.len() as u64)?;
+    for s in &d.snr_db_per_ant {
+        e.f64(*s)?;
+    }
+    Ok(())
+}
+
+fn decode_diversity(dec: &mut Decoder) -> Result<Diversity> {
+    let n = dec
+        .map()?
+        .ok_or(Error::Decode("diversity expected map".into()))?;
+    let mut antennas: Option<Vec<u8>> = None;
+    let mut snr_db_max: Option<f64> = None;
+    let mut snr_db_per_ant: Option<Vec<f64>> = None;
+    for _ in 0..n {
+        let key = dec.str()?.to_owned();
+        match key.as_str() {
+            "antennas" => {
+                let len = dec
+                    .array()?
+                    .ok_or(Error::Decode("antennas expected array".into()))?;
+                let mut v = Vec::with_capacity(len as usize);
+                for _ in 0..len {
+                    v.push(dec.u8()?);
+                }
+                antennas = Some(v);
+            }
+            "snr_db_max" => snr_db_max = Some(read_float(dec)?),
+            "snr_db_per_ant" => {
+                let len = dec
+                    .array()?
+                    .ok_or(Error::Decode("snr_db_per_ant expected array".into()))?;
+                let mut v = Vec::with_capacity(len as usize);
+                for _ in 0..len {
+                    v.push(read_float(dec)?);
+                }
+                snr_db_per_ant = Some(v);
+            }
+            _ => dec.skip()?,
+        }
+    }
+    Ok(Diversity {
+        antennas: antennas.ok_or(Error::MissingField("diversity.antennas"))?,
+        snr_db_max: snr_db_max.ok_or(Error::MissingField("diversity.snr_db_max"))?,
+        snr_db_per_ant: snr_db_per_ant.ok_or(Error::MissingField("diversity.snr_db_per_ant"))?,
+    })
 }
 
 fn decode_phy(dec: &mut Decoder) -> Result<Phy> {
@@ -263,6 +340,7 @@ fn decode_phy(dec: &mut Decoder) -> Result<Phy> {
     let mut sample_rate = None;
     let mut frequency_corrected = None;
     let mut ppm_error = None;
+    let mut diversity = None;
     for _ in 0..n {
         let key = dec.str()?.to_owned();
         match key.as_str() {
@@ -283,6 +361,7 @@ fn decode_phy(dec: &mut Decoder) -> Result<Phy> {
             "sample_rate" => sample_rate = Some(read_float(dec)?),
             "frequency_corrected" => frequency_corrected = Some(read_float(dec)?),
             "ppm_error" => ppm_error = Some(read_float(dec)?),
+            "diversity" => diversity = Some(decode_diversity(dec)?),
             _ => dec.skip()?,
         }
     }
@@ -304,6 +383,7 @@ fn decode_phy(dec: &mut Decoder) -> Result<Phy> {
         sample_rate,
         frequency_corrected,
         ppm_error,
+        diversity,
     })
 }
 
@@ -387,6 +467,7 @@ mod tests {
                 sample_rate: None,
                 frequency_corrected: None,
                 ppm_error: None,
+                diversity: None,
             },
             carrier: Carrier {
                 sync_word: 0x12,

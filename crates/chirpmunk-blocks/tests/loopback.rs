@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use chirpmunk_blocks::{FrameSink, FrameSinkConfig};
+use chirpmunk_blocks::{DedupState, FrameSink, FrameSinkConfig};
 use chirpmunk_cbor::LoraFrame;
 use chirpmunk_phy::default_values::{HAS_CRC, PREAMBLE_LEN};
 use chirpmunk_phy::utils::{
@@ -24,6 +24,7 @@ const PAD: usize = 10_000;
 #[test]
 fn tx_to_framesink_decodes_payload() -> Result<()> {
     let (tx, mut rx) = unbounded_channel();
+    let dedup = DedupState::new(Duration::ZERO, tx);
 
     let mut fg = Flowgraph::new();
     let transmitter = build_lora_tx(
@@ -66,7 +67,7 @@ fn tx_to_framesink_decodes_payload() -> Result<()> {
         decode_label: Some("loopback".into()),
         rx_channel: Some(0),
     };
-    let frame_sink = fg.add(FrameSink::new(cfg, tx));
+    let frame_sink = fg.add(FrameSink::new(cfg, dedup));
 
     connect!(fg,
         transmitter > frame_sync;

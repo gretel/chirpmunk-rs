@@ -8,9 +8,12 @@
 //! ships the encoded CBOR over an mpsc channel to a tokio task that
 //! broadcasts it via `chirpmunk_udp::Server`.
 
+use std::sync::Arc;
+
 use chirpmunk_cbor::{Carrier, LoraFrame, Phy};
 use futuresdr::runtime::dev::prelude::*;
-use tokio::sync::mpsc::UnboundedSender;
+
+use crate::dedup::DedupState;
 
 /// Static PHY configuration broadcast as the `phy` / `carrier` blocks
 /// of every emitted `lora_frame`. SNR / CFO / noise-floor are filled in
@@ -36,12 +39,12 @@ pub type Outbound = (Vec<u8>, u16);
 pub struct FrameSink {
     cfg: FrameSinkConfig,
     seq: u64,
-    tx: UnboundedSender<Outbound>,
+    dedup: Arc<DedupState>,
 }
 
 impl FrameSink {
-    pub fn new(cfg: FrameSinkConfig, tx: UnboundedSender<Outbound>) -> Self {
-        Self { cfg, seq: 0, tx }
+    pub fn new(cfg: FrameSinkConfig, dedup: Arc<DedupState>) -> Self {
+        Self { cfg, seq: 0, dedup }
     }
 
     fn build_frame(&self, payload: Vec<u8>, telemetry: Telemetry) -> LoraFrame {
@@ -68,6 +71,7 @@ impl FrameSink {
                 sample_rate: telemetry.sample_rate,
                 frequency_corrected: telemetry.frequency_corrected,
                 ppm_error: telemetry.ppm_error,
+                diversity: None,
             },
             carrier: Carrier {
                 sync_word: self.cfg.sync_word,
@@ -134,13 +138,11 @@ impl FrameSink {
             len = frame.payload_len,
             snr_db = frame.phy.snr_db,
             label = frame.decode_label.as_deref().unwrap_or(""),
+            rx_chan = frame.rx_channel.unwrap_or(0),
             "frame"
         );
-        let buf = chirpmunk_cbor::to_vec(&frame)
-            .map_err(|e| futuresdr::runtime::Error::RuntimeError(e.to_string()))?;
-        if self.tx.send((buf, self.cfg.sync_word)).is_err() {
-            tracing::warn!("frame_sink: broadcaster channel closed");
-        }
+        let sync_word = self.cfg.sync_word;
+        self.dedup.submit(frame, sync_word).await;
         Ok(Pmt::Ok)
     }
 }

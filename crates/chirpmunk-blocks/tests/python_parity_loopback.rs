@@ -11,7 +11,7 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use chirpmunk_blocks::{FrameSink, FrameSinkConfig};
+use chirpmunk_blocks::{DedupState, FrameSink, FrameSinkConfig};
 use chirpmunk_phy::default_values::{HAS_CRC, PREAMBLE_LEN};
 use chirpmunk_phy::utils::{
     Bandwidth, Channel, CodeRate, HeaderMode, LdroMode, SpreadingFactor, SynchWord,
@@ -87,6 +87,7 @@ async fn full_m1_loopback_to_python() -> Result<()> {
     }
 
     let (cbor_tx, mut cbor_rx) = unbounded_channel::<(Vec<u8>, u16)>();
+    let dedup = DedupState::new(Duration::ZERO, cbor_tx);
     {
         let s = server.clone();
         tokio::spawn(async move {
@@ -166,7 +167,7 @@ async fn full_m1_loopback_to_python() -> Result<()> {
         decode_label: Some("loopback".into()),
         rx_channel: Some(0),
     };
-    let frame_sink = fg.add(FrameSink::new(cfg, cbor_tx));
+    let frame_sink = fg.add(FrameSink::new(cfg, dedup));
 
     connect!(fg,
         transmitter > frame_sync;

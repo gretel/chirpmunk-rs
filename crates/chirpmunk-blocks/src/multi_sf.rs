@@ -17,8 +17,9 @@ use futuresdr::blocks::StreamDuplicator;
 use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
 
-use crate::{FrameSink, FrameSinkConfig, Outbound};
-use tokio::sync::mpsc::UnboundedSender;
+use std::sync::Arc;
+
+use crate::{DedupState, FrameSink, FrameSinkConfig};
 
 /// SF7..SF12 in chain order. Index 0 = SF7, …, 5 = SF12.
 pub const ALL_SF: [SpreadingFactor; 6] = [
@@ -37,7 +38,9 @@ pub struct MultiSfRx {
 }
 
 /// Build six parallel SF chains sharing one duplicator. All chains
-/// publish CBOR `lora_frame`s onto the shared `tx` mpsc.
+/// publish their decoded frames into the shared `dedup` state, which
+/// merges identical `(payload, sync, sf, bw)` arrivals across RX chains
+/// before forwarding to the outbound mpsc.
 pub fn build_multi_sf_rx(
     mut fg: &mut Flowgraph,
     chan: Channel,
@@ -45,7 +48,7 @@ pub fn build_multi_sf_rx(
     sync_word: SynchWord,
     os_factor: usize,
     cfg_template: FrameSinkConfig,
-    tx: UnboundedSender<Outbound>,
+    dedup: Arc<DedupState>,
 ) -> Result<MultiSfRx> {
     let entry = fg.add(StreamDuplicator::<Complex32, 6>::new());
 
@@ -72,7 +75,7 @@ pub fn build_multi_sf_rx(
             cfg.sf
         );
         cfg.decode_label = Some(label);
-        let frame_sink = fg.add(FrameSink::new(cfg, tx.clone()));
+        let frame_sink = fg.add(FrameSink::new(cfg, dedup.clone()));
         connect!(fg, decoder.out_annotated | frame_sink;);
         Ok(frame_sync)
     };
