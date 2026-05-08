@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use chirpmunk_blocks::{FrameSink, FrameSinkConfig, dispatch_lora_tx};
+use chirpmunk_blocks::{DedupState, FrameSink, FrameSinkConfig, dispatch_lora_tx};
 use chirpmunk_cbor::{LoraFrame, LoraTx};
 use chirpmunk_phy::default_values::{HAS_CRC, PREAMBLE_LEN};
 use chirpmunk_phy::utils::{
@@ -24,6 +24,7 @@ const PAD: usize = 10_000;
 #[test]
 fn cbor_lora_tx_drives_loopback_to_frame_sink() -> Result<()> {
     let (cbor_tx, mut rx) = unbounded_channel();
+    let dedup = DedupState::new(Duration::ZERO, cbor_tx);
 
     let mut fg = Flowgraph::new();
     let transmitter = build_lora_tx(
@@ -66,7 +67,7 @@ fn cbor_lora_tx_drives_loopback_to_frame_sink() -> Result<()> {
         decode_label: Some("m3-tx".into()),
         rx_channel: Some(0),
     };
-    let frame_sink = fg.add(FrameSink::new(cfg, cbor_tx));
+    let frame_sink = fg.add(FrameSink::new(cfg, dedup));
 
     connect!(fg,
         transmitter > frame_sync;
@@ -110,6 +111,7 @@ fn cbor_lora_tx_drives_loopback_to_frame_sink() -> Result<()> {
 #[test]
 fn dry_run_acks_without_dispatching() -> Result<()> {
     let (cbor_tx, mut rx) = unbounded_channel();
+    let dedup = DedupState::new(Duration::ZERO, cbor_tx);
     let mut fg = Flowgraph::new();
     let transmitter = build_lora_tx(
         &mut fg,
@@ -151,7 +153,7 @@ fn dry_run_acks_without_dispatching() -> Result<()> {
         decode_label: Some("m3-dryrun".into()),
         rx_channel: Some(0),
     };
-    let frame_sink = fg.add(FrameSink::new(cfg, cbor_tx));
+    let frame_sink = fg.add(FrameSink::new(cfg, dedup));
 
     connect!(fg,
         transmitter > frame_sync;

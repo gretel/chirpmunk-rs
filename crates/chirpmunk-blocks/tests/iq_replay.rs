@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use chirpmunk_blocks::{FrameSink, FrameSinkConfig};
+use chirpmunk_blocks::{DedupState, FrameSink, FrameSinkConfig};
 use chirpmunk_cbor::LoraFrame;
 use chirpmunk_phy::build_lora_rx_soft_decoding;
 use chirpmunk_phy::utils::{Bandwidth, Channel, HeaderMode, LdroMode, SpreadingFactor, SynchWord};
@@ -41,6 +41,7 @@ fn replay_sf7_cr1_bw125_decodes_hello_meshcore() -> Result<()> {
     assert!(!samples.is_empty(), "empty IQ vector");
 
     let (cbor_tx, mut rx) = unbounded_channel();
+    let dedup = DedupState::new(Duration::ZERO, cbor_tx);
 
     let mut fg = Flowgraph::new();
     let source = fg.add(VectorSource::<Complex32>::new(samples));
@@ -70,7 +71,7 @@ fn replay_sf7_cr1_bw125_decodes_hello_meshcore() -> Result<()> {
         decode_label: Some("replay".into()),
         rx_channel: Some(0),
     };
-    let frame_sink = fg.add(FrameSink::new(cfg, cbor_tx));
+    let frame_sink = fg.add(FrameSink::new(cfg, dedup));
 
     connect!(fg,
         source > frame_sync;

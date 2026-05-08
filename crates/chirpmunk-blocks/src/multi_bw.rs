@@ -11,14 +11,15 @@
 //! parametric in `os_factor`, so the same input rate can drive multiple
 //! BWs concurrently as long as `sample_rate % bw == 0`.
 
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use chirpmunk_phy::utils::{Bandwidth, Channel, SynchWord};
 use futuresdr::blocks::{NullSink, StreamDuplicator};
 use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
-use tokio::sync::mpsc::UnboundedSender;
 
-use crate::{FrameSinkConfig, MultiSfRx, Outbound, build_multi_sf_rx};
+use crate::{DedupState, FrameSinkConfig, MultiSfRx, build_multi_sf_rx};
 
 /// Maximum number of bandwidths supported per radio channel.
 /// Limited by the literal-only index requirement of FutureSDR's
@@ -37,7 +38,7 @@ fn build_branch(
     sync_word: SynchWord,
     sample_rate: u64,
     cfg_template: &FrameSinkConfig,
-    tx: UnboundedSender<Outbound>,
+    dedup: Arc<DedupState>,
 ) -> Result<MultiSfRx> {
     let os = (sample_rate / u64::from(bw_hz)) as usize;
     let bw_typed =
@@ -49,7 +50,7 @@ fn build_branch(
         cfg_template.decode_label.as_deref().unwrap_or("rx"),
         bw_hz / 1_000
     ));
-    build_multi_sf_rx(fg, chan, bw_typed, sync_word, os, cfg, tx)
+    build_multi_sf_rx(fg, chan, bw_typed, sync_word, os, cfg, dedup)
 }
 
 /// Build a multi-BW × multi-SF (SF7..SF12) RX grid.
@@ -64,7 +65,7 @@ pub fn build_multi_bw_rx(
     sync_word: SynchWord,
     sample_rate: u64,
     cfg_template: FrameSinkConfig,
-    tx: UnboundedSender<Outbound>,
+    dedup: Arc<DedupState>,
 ) -> Result<MultiBwRx> {
     if bandwidths.is_empty() {
         return Err(anyhow!("multi_bw: bandwidths must be non-empty"));
@@ -104,7 +105,7 @@ pub fn build_multi_bw_rx(
                 sync_word,
                 sample_rate,
                 &cfg_template,
-                tx.clone(),
+                dedup.clone(),
             )?;
             let s0 = m0.entry;
             let n1 = fg.add(NullSink::<Complex32>::new());
@@ -125,7 +126,7 @@ pub fn build_multi_bw_rx(
                 sync_word,
                 sample_rate,
                 &cfg_template,
-                tx.clone(),
+                dedup.clone(),
             )?;
             let m1 = build_branch(
                 fg,
@@ -134,7 +135,7 @@ pub fn build_multi_bw_rx(
                 sync_word,
                 sample_rate,
                 &cfg_template,
-                tx.clone(),
+                dedup.clone(),
             )?;
             let s0 = m0.entry;
             let s1 = m1.entry;
@@ -155,7 +156,7 @@ pub fn build_multi_bw_rx(
                 sync_word,
                 sample_rate,
                 &cfg_template,
-                tx.clone(),
+                dedup.clone(),
             )?;
             let m1 = build_branch(
                 fg,
@@ -164,7 +165,7 @@ pub fn build_multi_bw_rx(
                 sync_word,
                 sample_rate,
                 &cfg_template,
-                tx.clone(),
+                dedup.clone(),
             )?;
             let m2 = build_branch(
                 fg,
@@ -173,7 +174,7 @@ pub fn build_multi_bw_rx(
                 sync_word,
                 sample_rate,
                 &cfg_template,
-                tx.clone(),
+                dedup.clone(),
             )?;
             let s0 = m0.entry;
             let s1 = m1.entry;
@@ -194,7 +195,7 @@ pub fn build_multi_bw_rx(
                 sync_word,
                 sample_rate,
                 &cfg_template,
-                tx.clone(),
+                dedup.clone(),
             )?;
             let m1 = build_branch(
                 fg,
@@ -203,7 +204,7 @@ pub fn build_multi_bw_rx(
                 sync_word,
                 sample_rate,
                 &cfg_template,
-                tx.clone(),
+                dedup.clone(),
             )?;
             let m2 = build_branch(
                 fg,
@@ -212,7 +213,7 @@ pub fn build_multi_bw_rx(
                 sync_word,
                 sample_rate,
                 &cfg_template,
-                tx.clone(),
+                dedup.clone(),
             )?;
             let m3 = build_branch(
                 fg,
@@ -221,7 +222,7 @@ pub fn build_multi_bw_rx(
                 sync_word,
                 sample_rate,
                 &cfg_template,
-                tx.clone(),
+                dedup.clone(),
             )?;
             let s0 = m0.entry;
             let s1 = m1.entry;
@@ -248,6 +249,7 @@ pub fn build_multi_bw_rx(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn cfg_template() -> FrameSinkConfig {
         FrameSinkConfig {
@@ -261,10 +263,14 @@ mod tests {
         }
     }
 
+    fn passthrough_dedup() -> Arc<DedupState> {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        DedupState::new(Duration::ZERO, tx)
+    }
+
     #[test]
     fn rejects_empty() {
         let mut fg = Flowgraph::new();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let r = build_multi_bw_rx(
             &mut fg,
             Channel::EU868_1,
@@ -272,7 +278,7 @@ mod tests {
             SynchWord::from(0x12_u8),
             500_000,
             cfg_template(),
-            tx,
+            passthrough_dedup(),
         );
         assert!(r.is_err());
     }
@@ -280,7 +286,6 @@ mod tests {
     #[test]
     fn rejects_non_divisible_rate() {
         let mut fg = Flowgraph::new();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let r = build_multi_bw_rx(
             &mut fg,
             Channel::EU868_1,
@@ -288,7 +293,7 @@ mod tests {
             SynchWord::from(0x12_u8),
             123_456,
             cfg_template(),
-            tx,
+            passthrough_dedup(),
         );
         assert!(r.is_err());
     }
@@ -296,7 +301,6 @@ mod tests {
     #[test]
     fn builds_two_bandwidths() {
         let mut fg = Flowgraph::new();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let r = build_multi_bw_rx(
             &mut fg,
             Channel::EU868_1,
@@ -304,7 +308,7 @@ mod tests {
             SynchWord::from(0x12_u8),
             500_000,
             cfg_template(),
-            tx,
+            passthrough_dedup(),
         );
         assert!(r.is_ok(), "build_multi_bw_rx should succeed: {:?}", r.err());
         let h = r.unwrap();

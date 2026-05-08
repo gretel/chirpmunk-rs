@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use chirpmunk_blocks::{FrameSinkConfig, build_multi_sf_rx};
+use chirpmunk_blocks::{DedupState, FrameSinkConfig, build_multi_sf_rx};
 use chirpmunk_cbor::LoraFrame;
 use chirpmunk_phy::default_values::{HAS_CRC, PREAMBLE_LEN};
 use chirpmunk_phy::utils::{
@@ -26,6 +26,7 @@ const PAD: usize = 10_000;
 fn only_matching_sf_chain_decodes() -> Result<()> {
     let _ = DemodulatedSymbolHardDecoding::default();
     let (tx, mut rx) = unbounded_channel();
+    let dedup = DedupState::new(Duration::ZERO, tx);
 
     let mut fg = Flowgraph::new();
     let transmitter = build_lora_tx(
@@ -59,7 +60,7 @@ fn only_matching_sf_chain_decodes() -> Result<()> {
         SynchWord::Private,
         1,
         cfg,
-        tx,
+        dedup,
     )
     .expect("build multi-sf rx");
 

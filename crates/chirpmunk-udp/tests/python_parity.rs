@@ -58,6 +58,7 @@ fn sample_frame() -> LoraFrame {
             sample_rate: None,
             frequency_corrected: None,
             ppm_error: None,
+            diversity: None,
         },
         carrier: Carrier {
             sync_word: 0x12,

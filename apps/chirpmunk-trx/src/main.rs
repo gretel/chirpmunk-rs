@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chirpmunk_blocks::{
-    ChannelActivityDetector, FrameSink, FrameSinkConfig, LbtPolicy, SoapyDirectSink,
+    ChannelActivityDetector, DedupState, FrameSink, FrameSinkConfig, LbtPolicy, SoapyDirectSink,
     SoapyDirectSource, SoapyRxConfig, SoapyTxConfig, default_alpha, dispatch_lora_tx, open_device,
 };
 use chirpmunk_cbor::LoraTx;
@@ -266,6 +266,13 @@ async fn main() -> Result<()> {
             .ok_or_else(|| anyhow!("hardware mode requires --config"))?;
         build_seify_args(&cfg.device.driver, &cfg.device.param)
     };
+    let dedup_window_ms = trx_opt
+        .and_then(|t| t.receive.as_ref())
+        .and_then(|r| r.dedup_window_ms)
+        .unwrap_or(0);
+    let dedup = DedupState::from_window_ms(dedup_window_ms, cbor_tx);
+    info!(dedup_window_ms, "dedup state");
+
     let cfg_sink = FrameSinkConfig {
         sf: u8::from(sf),
         bw: bw_hz,
@@ -282,7 +289,7 @@ async fn main() -> Result<()> {
         ),
         rx_channel: Some(0),
     };
-    let frame_sink = fg.add(FrameSink::new(cfg_sink, cbor_tx));
+    let frame_sink = fg.add(FrameSink::new(cfg_sink, dedup.clone()));
 
     // CAD busy flag — writer = ChannelActivityDetector, reader = LBT poll
     // in dispatch_lora_tx.
