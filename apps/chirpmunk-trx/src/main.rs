@@ -37,7 +37,7 @@ use chirpmunk_phy::utils::{
 use chirpmunk_phy::{build_lora_rx_soft_decoding, build_lora_tx};
 use chirpmunk_udp::Server;
 use clap::Parser;
-use futuresdr::blocks::StreamDuplicator;
+use futuresdr::blocks::{NullSink, StreamDuplicator};
 use futuresdr::num_complex::Complex32;
 use futuresdr::prelude::*;
 use tokio::sync::mpsc::unbounded_channel;
@@ -338,7 +338,6 @@ async fn main() -> Result<()> {
             rate_hz: sample_rate,
             gain_db: radio.rx_gain,
             antenna: radio.rx_antenna.first().cloned(),
-            channel: 0,
         };
         let tx_cfg = SoapyTxConfig {
             freq_hz: radio.freq as f64,
@@ -356,9 +355,14 @@ async fn main() -> Result<()> {
 
         let rx_source = fg.add(SoapyDirectSource::new(dev.clone(), rx_cfg));
         let tx_sink = fg.add(SoapyDirectSink::new(dev.clone(), tx_cfg));
+        // Diversity-RX wiring lands in a follow-up; v1 sinks the
+        // second RX channel so the kernel keeps draining both
+        // channels in lockstep (B210 channel-symmetry requirement).
+        let rx_chan1_null = fg.add(NullSink::<Complex32>::new());
 
         connect!(fg,
-            rx_source > entry_dup;
+            rx_source.out0 > entry_dup;
+            rx_source.out1 > rx_chan1_null;
             entry_dup.outputs[0] > frame_sync;
             entry_dup.outputs[1] > cad_id;
             transmitter > tx_sink;
