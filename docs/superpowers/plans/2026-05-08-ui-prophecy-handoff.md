@@ -1,6 +1,41 @@
 # UI Handoff — adopt prophecy as shipped
 
-Status: Handoff. Author: Tom + agent. Date: 2026-05-08.
+Status: Phases A, B.1, B.2 all done and verified in-session. Phase
+C deferred. Author: Tom + agent. Date: 2026-05-08.
+
+## Verification log (2026-05-08)
+
+- Phase A — confirmed live. `chirpmunk-trx --loopback` exposes the
+  generic prophecy GUI at `http://127.0.0.1:1337/`. `curl /api/fg/`
+  returns `[0]` and `curl /` returns
+  `<title>FutureSDR :: Prophecy GUI</title>`. No code change.
+- Phase B.1 — landed in commit `728b8b3 feat(trx,config): spectrum
+  tap WS feed for prophecy waterfall`. The `[trx.spectrum]` TOML
+  section gates an FFT → magnitude → moving-avg → WebsocketSink
+  branch off `entry_dup.outputs[2]`. Smoke test with `enabled =
+  true, ws_port = 9101`: `lsof -iTCP:9101 -sTCP:LISTEN` confirms
+  `chirpmunk-trx` listening, log line `spectrum tap enabled
+  ws_port=9101 fft_size=2048` present. `entry_dup` was bumped from
+  `<Complex32, 2>` to `<Complex32, 3>`; the third output is wired
+  to a `NullSink` when the section is absent or `enabled = false`.
+- Phase B.2 — chirpmunk-ui crate scaffolded at
+  `/Users/tom/src/uhd/chirpmunk/crates/chirpmunk-ui/`. Detached from
+  the chirpmunk Cargo workspace (own `[workspace]` stanza, builds
+  via Trunk for `wasm32-unknown-unknown` only). Uses prophecy as a
+  Leptos component library. `trunk build --release` succeeded:
+  `dist/index.html` (1.2 K), `dist/frontend-…_bg.wasm` (813 K),
+  `dist/frontend-…js` (54 K), `dist/style-…css` (19 K). Smoke test
+  with `FUTURESDR_FRONTEND_PATH=…/chirpmunk-ui/dist` env var: `curl
+  http://127.0.0.1:1337/` returns `<title>chirpmunk :: LoRa</title>`,
+  ports 1337 (HTTP) + 9101 (spectrum WS) both listening. Required
+  toolchains — `brew install trunk` (0.21.14), `rustup toolchain
+  install nightly --component rust-src`, `rustup target add
+  wasm32-unknown-unknown --toolchain nightly`. The `nightly` channel
+  is needed because `prophecy` enables Leptos's `nightly` feature
+  (signal-as-function call shorthand). `rust-toolchain.toml` in the
+  crate pins the channel locally.
+
+
 
 Supersedes — `2026-05-08-ui-spectrum-design.md` and
 `2026-05-08-ui-spectrum-plan.md`. Those propose a brand-new
