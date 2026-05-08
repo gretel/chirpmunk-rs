@@ -15,4 +15,4 @@ pub use multi_sf::{ALL_SF, MultiSfRx, build_multi_sf_rx};
 pub use soapy_direct::{
     SoapyDirectSink, SoapyDirectSource, SoapyRxConfig, SoapyTxConfig, open_device,
 };
-pub use tx_dispatch::dispatch_lora_tx;
+pub use tx_dispatch::{LbtOutcome, LbtPolicy, dispatch_lora_tx, wait_until_clear};

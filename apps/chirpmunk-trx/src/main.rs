@@ -357,7 +357,7 @@ async fn main() -> Result<()> {
                         continue;
                     }
                 };
-                let ack = dispatch_lora_tx(&handle, transmitter_id, &req).await;
+                let ack = dispatch_lora_tx(&handle, transmitter_id, &req, None).await;
                 match chirpmunk_cbor::to_vec(&ack) {
                     Ok(buf) => {
                         if let Err(e) = server.send_to(&buf, peer).await {

@@ -84,7 +84,7 @@ fn cbor_lora_tx_drives_loopback_to_frame_sink() -> Result<()> {
     };
 
     let (ack, frame) = Runtime::block_on(async move {
-        let ack = dispatch_lora_tx(&handle, transmitter_id, &req).await;
+        let ack = dispatch_lora_tx(&handle, transmitter_id, &req, None).await;
         let mut frame: Option<LoraFrame> = None;
         for _ in 0..200 {
             if let Ok((bytes, _sw)) = rx.try_recv() {
@@ -170,7 +170,7 @@ fn dry_run_acks_without_dispatching() -> Result<()> {
     };
 
     let (ack, observed) = Runtime::block_on(async move {
-        let ack = dispatch_lora_tx(&handle, transmitter_id, &req).await;
+        let ack = dispatch_lora_tx(&handle, transmitter_id, &req, None).await;
         Timer::after(Duration::from_millis(200)).await;
         let any = rx.try_recv().is_ok();
         (ack, any)
