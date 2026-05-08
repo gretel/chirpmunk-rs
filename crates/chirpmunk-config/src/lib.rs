@@ -128,6 +128,14 @@ pub struct TrxReceive {
     pub bandwidths: Vec<u32>,
     #[serde(default)]
     pub chain: Vec<TrxReceiveChain>,
+    /// CAD detection threshold (peak/mean ratio). `None` = derive from
+    /// `default_alpha(sf, os_factor)` per Vangelista & Calvagno.
+    #[serde(default)]
+    pub cad_min_ratio: Option<f32>,
+    /// CAD release hysteresis: number of consecutive clean windows
+    /// before the busy flag is cleared. Default 4.
+    #[serde(default)]
+    pub cad_release_symbols: Option<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
