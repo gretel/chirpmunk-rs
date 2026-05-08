@@ -51,41 +51,35 @@ pub struct SoapyRxConfig {
     pub rate_hz: f64,
     pub gain_db: f64,
     pub antenna: Option<String>,
-    pub channel: usize,
 }
 
 /// Direct-soapysdr RX source block.
 ///
-/// Opens RX on TWO channels because the B200 family enforces symmetric
-/// channel counts when paired with a 2-channel TX stream. Channel 0
-/// carries the real signal and is forwarded to the FutureSDR output
-/// port; channel 1's samples are read into a scratch buffer and
-/// discarded.
+/// Always opens RX on TWO channels — the B200 family enforces symmetric
+/// channel counts when paired with a 2-channel TX stream — and exposes
+/// both as independent stream output ports (`out0`, `out1`). Callers
+/// that only want single-antenna RX wire `out1` to a `NullSink`; the
+/// hardware still reads channel 1 because driver symmetry demands it.
 #[derive(Block)]
 #[blocking]
 pub struct SoapyDirectSource {
     #[output]
-    output: DefaultCpuWriter<Complex32>,
+    out0: DefaultCpuWriter<Complex32>,
+    #[output]
+    out1: DefaultCpuWriter<Complex32>,
     dev: soapysdr::Device,
     cfg: SoapyRxConfig,
     rx: Option<soapysdr::RxStream<Complex32>>,
-    /// Scratch buffer for channel 0 IQ (copied into the FutureSDR
-    /// output port after read). Avoids `unsafe` aliasing of the two
-    /// `&mut [Complex32]` slices required by `RxStream::read`.
-    scratch0: Vec<Complex32>,
-    /// Discard buffer for channel 1 IQ.
-    discard: Vec<Complex32>,
 }
 
 impl SoapyDirectSource {
     pub fn new(dev: soapysdr::Device, cfg: SoapyRxConfig) -> Self {
         Self {
-            output: DefaultCpuWriter::default(),
+            out0: DefaultCpuWriter::default(),
+            out1: DefaultCpuWriter::default(),
             dev,
             cfg,
             rx: None,
-            scratch0: Vec::new(),
-            discard: Vec::new(),
         }
     }
 }
@@ -126,7 +120,7 @@ impl Kernel for SoapyDirectSource {
             freq = self.cfg.freq_hz,
             rate = self.cfg.rate_hz,
             gain = self.cfg.gain_db,
-            "soapy_direct rx active (2ch, chan0 forwarded, chan1 discarded)"
+            "soapy_direct rx active (2ch, both forwarded as out0/out1)"
         );
         Ok(())
     }
@@ -137,28 +131,31 @@ impl Kernel for SoapyDirectSource {
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {
-        let n = self.output.slice().len();
+        // Both output ports must have writable space — RxStream::read
+        // produces samples for both channels in lockstep. Stall both
+        // ports if either is full so we never desync chan0 vs chan1.
+        let n = {
+            let s0 = self.out0.slice();
+            let s1 = self.out1.slice();
+            s0.len().min(s1.len())
+        };
         if n == 0 {
             return Ok(());
         }
-        if self.scratch0.len() < n {
-            self.scratch0.resize(n, Complex32::new(0.0, 0.0));
-        }
-        if self.discard.len() < n {
-            self.discard.resize(n, Complex32::new(0.0, 0.0));
-        }
         let rx = self.rx.as_mut().ok_or_else(|| anyhow!("rx not active"))?;
-        let (chan0, chan1) = {
-            let s0 = self.scratch0.as_mut_slice();
-            let s1 = self.discard.as_mut_slice();
-            (&mut s0[..n], &mut s1[..n])
+        // Borrow the two output buffers as separate `&mut [Complex32]`
+        // slices — disjoint fields on `self` so the compiler accepts
+        // simultaneous mutable borrows. Direct write avoids the memcpy
+        // hop the previous single-output design needed.
+        let result = {
+            let chan0: &mut [Complex32] = &mut self.out0.slice()[..n];
+            let chan1: &mut [Complex32] = &mut self.out1.slice()[..n];
+            rx.read(&mut [chan0, chan1], 500_000)
         };
-        let result = rx.read(&mut [chan0, chan1], 500_000);
         match result {
             Ok(len) => {
-                let dst = self.output.slice();
-                dst[..len].copy_from_slice(&self.scratch0[..len]);
-                self.output.produce(len);
+                self.out0.produce(len);
+                self.out1.produce(len);
                 io.call_again = true;
             }
             Err(e) => {
