@@ -111,6 +111,23 @@ pub struct Trx {
     pub transmit: Option<TrxTransmit>,
     pub receive: Option<TrxReceive>,
     pub network: Option<TrxNetwork>,
+    pub spectrum: Option<TrxSpectrum>,
+}
+
+/// Optional `[trx.spectrum]` block: when `enabled = true`, chirpmunk-trx
+/// adds an FFT + magnitude + moving-average + WebSocket sink branch to
+/// the RX flowgraph. Frontend (prophecy-based) connects to
+/// `ws://host:ws_port` to get f32 magnitudes for the waterfall.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrxSpectrum {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_spectrum_ws_port")]
+    pub ws_port: u16,
+}
+
+fn default_spectrum_ws_port() -> u16 {
+    9001
 }
 
 #[derive(Debug, Clone, Deserialize)]
