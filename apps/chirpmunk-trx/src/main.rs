@@ -372,9 +372,6 @@ async fn main() -> Result<()> {
             } else {
                 Some(radio.tx_antenna.clone())
             },
-            // 200 ms in the future — gives host time to pre-fill UHD's
-            // internal ring before any RF is emitted.
-            activation_offset_ns: 200_000_000,
         };
 
         let rx_source = fg.add(SoapyDirectSource::new(dev.clone(), rx_cfg));
