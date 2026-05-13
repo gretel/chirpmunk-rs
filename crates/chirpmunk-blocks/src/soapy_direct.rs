@@ -10,17 +10,18 @@
 //! events on every write with the FPGA TX FIFO never reaching the
 //! antenna PA.
 //!
-//! TX submission strategy — accumulate-then-flush with wall-clock
-//! idle detection. Each `work()` tick with input drains it into an
-//! internal `Vec<Complex32>` and stamps `last_input_time`. On a tick
-//! with empty input, if the buffer is non-empty AND wall-clock since
-//! the last input exceeds `IDLE_FLUSH_MS`, the burst is flushed using
-//! the proven probe recipe (activate at `now + activation_offset_ns`,
-//! tight write loop, `end_burst=true` on last chunk, 400 ms FPGA TX
-//! FIFO drain, deactivate). Streamer is dormant between bursts — no
-//! sustained DAC drain on this clone, no SSSS storm. Idle ticks sleep
-//! briefly to cooperate with the FutureSDR scheduler instead of busy-
-//! spinning.
+//! TX strategy — continuous streaming with chunked writes across
+//! scheduler ticks.  Stream activates once at init (untimed, no
+//! HAS_TIME), stays active for the block lifetime.  Each `work()`
+//! tick writes at most one MTU-sized chunk so the scheduler can
+//! interleave RX processing between chunks.  Idle ticks sleep and
+//! let the DAC underflow (tolerated — underflows are logged, not
+//! fatal).  Deactivate only at deinit.
+//!
+//! This replaces the previous per-burst timed-activation pattern
+//! (`activate(Some(now+offset))` + `end_burst=true` + drain +
+//! deactivate) which was confirmed by gr4-lora commit 0fd7434 to
+//! hang B220 TX by blocking the scheduler on first processBulk.
 
 use anyhow::{Context, Result, anyhow};
 use futuresdr::num_complex::Complex32;
@@ -86,9 +87,6 @@ impl SoapyDirectSource {
 
 impl Kernel for SoapyDirectSource {
     async fn init(&mut self, _mo: &mut MessageOutputs, _meta: &mut BlockMeta) -> Result<()> {
-        // Configure both RX channels to keep UHD's channel-symmetry
-        // constraint satisfied; the user-facing config drives chan 0,
-        // chan 1 mirrors it (gain irrelevant — discarded).
         for chan in [0usize, 1usize] {
             self.dev
                 .set_sample_rate(Direction::Rx, chan, self.cfg.rate_hz)
@@ -108,10 +106,6 @@ impl Kernel for SoapyDirectSource {
             .dev
             .rx_stream::<Complex32>(&[0, 1])
             .map_err(|e| anyhow!("rx_stream(2ch): {e:?}"))?;
-        // Multi-channel RX requires a timed activation so UHD can
-        // time-align the channels. Read current hardware time and
-        // start 100 ms in the future — independent of which block
-        // (Source or Sink) ran init() first.
         let now_ns = self.dev.get_hardware_time(None).unwrap_or(0);
         rx.activate(Some(now_ns + 100_000_000))
             .map_err(|e| anyhow!("rx activate: {e:?}"))?;
@@ -131,9 +125,6 @@ impl Kernel for SoapyDirectSource {
         _mo: &mut MessageOutputs,
         _meta: &mut BlockMeta,
     ) -> Result<()> {
-        // Both output ports must have writable space — RxStream::read
-        // produces samples for both channels in lockstep. Stall both
-        // ports if either is full so we never desync chan0 vs chan1.
         let n = {
             let s0 = self.out0.slice();
             let s1 = self.out1.slice();
@@ -143,10 +134,6 @@ impl Kernel for SoapyDirectSource {
             return Ok(());
         }
         let rx = self.rx.as_mut().ok_or_else(|| anyhow!("rx not active"))?;
-        // Borrow the two output buffers as separate `&mut [Complex32]`
-        // slices — disjoint fields on `self` so the compiler accepts
-        // simultaneous mutable borrows. Direct write avoids the memcpy
-        // hop the previous single-output design needed.
         let result = {
             let chan0: &mut [Complex32] = &mut self.out0.slice()[..n];
             let chan1: &mut [Complex32] = &mut self.out1.slice()[..n];
@@ -190,20 +177,7 @@ pub struct SoapyTxConfig {
     pub rate_hz: f64,
     pub gain_db: f64,
     pub antenna: Option<String>,
-    /// Activation offset in nanoseconds (typical 200 ms = 200_000_000).
-    /// Streamer activates at `get_hardware_time + activation_offset_ns`
-    /// so the host has time to pre-fill UHD's internal ring before any
-    /// RF is emitted.
-    pub activation_offset_ns: i64,
 }
-
-/// Wall-clock idle threshold: time since last input arrival before a
-/// pending burst is flushed. Tradeoff: lower = more responsive but
-/// risks fragmenting one LoRa frame across multiple flushes if the
-/// scheduler hiccups; higher = more latency before TX hits the air.
-/// 100 ms is well above any FutureSDR scheduler hiccup we observe and
-/// well below the inter-frame gap of any sane sender.
-const IDLE_FLUSH_MS: u64 = 100;
 
 /// Sleep duration on idle ticks so the FutureSDR scheduler can run
 /// upstream blocks instead of busy-spinning this sink.
@@ -214,15 +188,39 @@ const IDLE_TICK_SLEEP_MS: u64 = 5;
 /// of seconds of audio — far above any realistic burst.
 const MAX_BURST_SAMPLES: usize = 16 * 1024 * 1024;
 
-/// Direct-soapysdr TX sink block. Accumulate-then-flush with wall-
-/// clock idle detection. Streamer is dormant between bursts so the
-/// AD9361 PA never has to sustain wire-rate fed-empty operation —
-/// continuous-streaming was tried and confirmed to corrupt the USB
-/// transport on this clone (SSSS storm → `LIBUSB_ERROR_NO_DEVICE`).
+/// Write one MTU-sized chunk of `burst[start..]` to the TX stream.
+/// Channel 0 carries real IQ; channel 1 is zero-filled.
+/// Does NOT set `end_burst`.
+fn write_tx_chunk(
+    tx: &mut soapysdr::TxStream<Complex32>,
+    zero: &[Complex32],
+    mtu: usize,
+    burst: &[Complex32],
+    start: usize,
+) -> Result<usize> {
+    let remaining = burst.len() - start;
+    let take = remaining.min(mtu);
+    if take == 0 {
+        return Ok(0);
+    }
+    let real = &burst[start..start + take];
+    let zero_slice = &zero[..take];
+    let written = tx
+        .write(&[real, zero_slice], None, false, 5_000_000)
+        .map_err(|e| anyhow!("tx.write: {e:?}"))?;
+    if written == 0 {
+        return Err(anyhow!("tx.write returned 0; ring stalled"));
+    }
+    Ok(written)
+}
+
+/// Direct-soapysdr TX sink block. Continuous streaming mode with
+/// chunked writes across scheduler ticks.
 ///
-/// Single Complex32 input port; channel-1 zero IQ is synthesized
-/// internally to engage the second DUC chain in the FPGA (required
-/// by this clone for the TX path to engage cleanly).
+/// Stream activates once at init (untimed) and stays active for the
+/// block lifetime.  Each `work()` tick writes at most one MTU-sized
+/// chunk so the scheduler can interleave RX processing between chunks.
+/// Deactivate only at deinit.
 #[derive(Block)]
 #[blocking]
 pub struct SoapyDirectSink {
@@ -238,9 +236,15 @@ pub struct SoapyDirectSink {
     /// Pending burst — accumulated from upstream across multiple
     /// `work()` ticks until idle threshold is reached.
     pending: Vec<Complex32>,
-    /// Wall-clock instant of the most recent input append. `None`
-    /// means buffer is empty / no burst in progress.
-    last_input_at: Option<std::time::Instant>,
+    /// Burst being actively written across scheduler ticks. Empty
+    /// means no write in progress.
+    write_burst: Vec<Complex32>,
+    /// How many samples of `write_burst` have already been written.
+    write_cursor: usize,
+    /// Whether the TX stream is currently activated. Activated per burst,
+    /// deactivated when the burst is fully written so the PA is off
+    /// between transmissions.
+    stream_active: bool,
 }
 
 impl SoapyDirectSink {
@@ -253,7 +257,9 @@ impl SoapyDirectSink {
             zero: vec![Complex32::new(0.0, 0.0); 4096],
             mtu: 2040,
             pending: Vec::new(),
-            last_input_at: None,
+            write_burst: Vec::new(),
+            write_cursor: 0,
+            stream_active: false,
         }
     }
 
@@ -262,95 +268,10 @@ impl SoapyDirectSink {
             self.zero.resize(n, Complex32::new(0.0, 0.0));
         }
     }
-
-    /// Activate streamer at `now + activation_offset_ns`, tight-loop
-    /// write the whole burst in MTU-sized chunks (last chunk carries
-    /// `end_burst=true`), drain UHD async events, sleep for the FPGA
-    /// TX FIFO to drain, then deactivate. Matches the proven probe
-    /// recipe in `tmp/soapy-tx-probe/`.
-    fn flush_burst(&mut self, burst: &[Complex32]) -> Result<()> {
-        let mtu = self.mtu;
-        self.ensure_zero(mtu);
-        let now_ns = self.dev.get_hardware_time(None).unwrap_or(0);
-        let activate_at = now_ns + self.cfg.activation_offset_ns;
-
-        {
-            let tx = self.tx.as_mut().ok_or_else(|| anyhow!("tx not open"))?;
-            tx.activate(Some(activate_at))
-                .map_err(|e| anyhow!("tx.activate: {e:?}"))?;
-        }
-        tracing::info!(activate_at, samples = burst.len(), mtu, "burst flush start");
-
-        let mut idx = 0;
-        while idx < burst.len() {
-            let take = (burst.len() - idx).min(mtu);
-            let last = idx + take == burst.len();
-            let real = &burst[idx..idx + take];
-            let zero_slice = &self.zero[..take];
-            let written = {
-                let tx = self.tx.as_mut().unwrap();
-                tx.write(&[real, zero_slice], None, last, 5_000_000)
-                    .map_err(|e| anyhow!("tx.write: {e:?}"))?
-            };
-            if written == 0 {
-                return Err(anyhow!("tx.write returned 0; ring stalled"));
-            }
-            idx += written;
-        }
-
-        self.drain_async();
-        // FPGA TX FIFO drain window. Matches the proven probe recipe;
-        // shorter values race the deactivate against in-flight DAC
-        // samples on this clone.
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        if let Some(tx) = self.tx.as_mut() {
-            let _ = tx.deactivate(None);
-        }
-        tracing::info!(written = idx, "burst flush end");
-        Ok(())
-    }
-
-    /// Non-blocking drain of UHD async events. Logs underflow / time-
-    /// error / corruption.
-    fn drain_async(&mut self) {
-        use soapysdr::ErrorCode;
-        let tx = match self.tx.as_mut() {
-            Some(t) => t,
-            None => return,
-        };
-        loop {
-            let mut chan_mask = 0usize;
-            let mut ev_flags = 0i32;
-            let mut t_ns = 0i64;
-            match tx.read_status(&mut chan_mask, &mut ev_flags, &mut t_ns, 0) {
-                Ok(_) => {
-                    tracing::trace!(flags = format!("0x{:x}", ev_flags), "tx async ok");
-                }
-                Err(e) => match e.code {
-                    ErrorCode::Timeout => break,
-                    ErrorCode::Underflow => {
-                        tracing::warn!("tx underflow");
-                    }
-                    ErrorCode::TimeError => {
-                        tracing::warn!("tx time_error");
-                    }
-                    ErrorCode::Corruption => {
-                        tracing::error!("tx corruption");
-                    }
-                    other => {
-                        tracing::warn!(?other, "tx async error");
-                        break;
-                    }
-                },
-            }
-        }
-    }
 }
 
 impl Kernel for SoapyDirectSink {
     async fn init(&mut self, _mo: &mut MessageOutputs, _meta: &mut BlockMeta) -> Result<()> {
-        // Configure both TX channels (0 = real, 1 = zero-fill). UHD
-        // requires consistent config to engage the second DUC chain.
         for chan in [0usize, 1usize] {
             self.dev
                 .set_sample_rate(Direction::Tx, chan, self.cfg.rate_hz)
@@ -374,15 +295,14 @@ impl Kernel for SoapyDirectSink {
         let mtu = tx.mtu().unwrap_or(2040).min(2040);
         self.mtu = mtu;
         self.ensure_zero(mtu);
-        // Streamer stays dormant between bursts — `flush_burst`
-        // activates / writes / deactivates per LoRa frame.
+
         self.tx = Some(tx);
         tracing::info!(
             freq = self.cfg.freq_hz,
             rate = self.cfg.rate_hz,
             gain = self.cfg.gain_db,
             mtu,
-            "soapy_direct tx ready (2ch, dormant; activates per burst)"
+            "soapy_direct tx ready (2ch, activates per burst)"
         );
         Ok(())
     }
@@ -395,49 +315,89 @@ impl Kernel for SoapyDirectSink {
     ) -> Result<()> {
         let n_input = self.input.slice().len();
 
-        if n_input > 0 {
+        if n_input > 0 && self.write_cursor == 0 {
             let room = MAX_BURST_SAMPLES.saturating_sub(self.pending.len());
             let take = n_input.min(room);
             if take > 0 {
                 let src: &[Complex32] = self.input.slice();
                 self.pending.extend_from_slice(&src[..take]);
                 self.input.consume(take);
-                self.last_input_at = Some(std::time::Instant::now());
+            }
+            io.call_again = true;
+            return Ok(());
+        }
+
+        if self.write_cursor > 0 {
+            self.ensure_zero(self.mtu);
+            let tx = self.tx.as_mut().ok_or_else(|| anyhow!("tx not open"))?;
+            let zero = &self.zero[..self.mtu];
+            let burst = &self.write_burst;
+            let cursor = self.write_cursor;
+            let written = write_tx_chunk(tx, zero, self.mtu, burst, cursor)?;
+            self.write_cursor += written;
+            if self.write_cursor >= self.write_burst.len() {
+                // Burst fully written — deactivate stream so PA is off
+                // between bursts.  If daemon dies now, no RF emission.
+                let _ = tx.deactivate(None);
+                self.stream_active = false;
+                self.write_burst.clear();
+                self.write_cursor = 0;
             }
             io.call_again = true;
             return Ok(());
         }
 
         if self.pending.is_empty() {
-            // Truly idle. Yield to the scheduler so upstream can run
-            // when input arrives. Brief blocking sleep is the
-            // simplest way to avoid busy-spinning a `#[blocking]`
-            // kernel thread.
             std::thread::sleep(std::time::Duration::from_millis(IDLE_TICK_SLEEP_MS));
             io.call_again = true;
             return Ok(());
         }
 
-        let elapsed = self.last_input_at.map(|t| t.elapsed()).unwrap_or_default();
-        if elapsed < std::time::Duration::from_millis(IDLE_FLUSH_MS) {
-            std::thread::sleep(std::time::Duration::from_millis(IDLE_TICK_SLEEP_MS));
-            io.call_again = true;
-            return Ok(());
-        }
+        // Start a new burst: activate stream, write first chunk.
+        self.write_burst = std::mem::take(&mut self.pending);
+        self.write_cursor = 0;
 
-        let burst = std::mem::take(&mut self.pending);
-        self.last_input_at = None;
-        let res = self.flush_burst(&burst);
+        self.ensure_zero(self.mtu);
+        let tx = self.tx.as_mut().ok_or_else(|| anyhow!("tx not open"))?;
+        tx.activate(None)
+            .map_err(|e| anyhow!("tx.activate: {e:?}"))?;
+        self.stream_active = true;
+
+        let zero = &self.zero[..self.mtu];
+        let burst = &self.write_burst;
+        let written = write_tx_chunk(tx, zero, self.mtu, burst, 0)?;
+        self.write_cursor = written;
+        if self.write_cursor >= self.write_burst.len() {
+            let _ = tx.deactivate(None);
+            self.stream_active = false;
+            self.write_burst.clear();
+            self.write_cursor = 0;
+        }
         io.call_again = true;
-        res
+        Ok(())
     }
 
     async fn deinit(&mut self, _mo: &mut MessageOutputs, _meta: &mut BlockMeta) -> Result<()> {
+        if !self.stream_active {
+            return Ok(());
+        }
+        self.ensure_zero(self.mtu);
+        #[allow(clippy::collapsible_if)]
+        if !self.write_burst.is_empty() && self.write_cursor < self.write_burst.len() {
+            if let Some(tx) = self.tx.as_mut() {
+                let remaining = &self.write_burst[self.write_cursor..];
+                let zero = &self.zero[..self.mtu];
+                let mut idx = 0;
+                while idx < remaining.len() {
+                    if let Ok(written) = write_tx_chunk(tx, zero, self.mtu, remaining, idx) {
+                        idx += written;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
         if let Some(tx) = self.tx.as_mut() {
-            // Empty write with end_burst=true to flush UHD's FIFO
-            // cleanly; brief drain window before deactivate.
-            let _ = tx.write(&[&[], &[]], None, true, 1_000_000);
-            std::thread::sleep(std::time::Duration::from_millis(400));
             let _ = tx.deactivate(None);
         }
         Ok(())

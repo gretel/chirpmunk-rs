@@ -377,6 +377,7 @@ dependencies = [
  "chirpmunk-udp",
  "chrono",
  "futuresdr",
+ "rustfft",
  "serde_json",
  "soapysdr",
  "thiserror",
