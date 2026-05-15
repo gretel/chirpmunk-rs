@@ -1,37 +1,59 @@
-# chirpmunk
+# chirpmunk-rs
 
-Rust LoRa transceiver + wideband scanner on FutureSDR.
+**chirpmunk-rs** — a Rust LoRa PHY transceiver and wideband scanner built on [FutureSDR](https://github.com/gretel/FutureSDR), paired with a CBOR/UDP control plane compatible with `chirpmunk-gr4`.
 
-Behaviourally interoperable with the `gr4-lora` (LOST) CBOR/UDP control
-plane and the `lora.*` Python userland.
+> **Status:** research prototype. APIs, configuration, and on-wire formats change without notice. Not production-ready.
 
-See [SPEC.md](SPEC.md) for architecture and milestones, [REPORT.md](REPORT.md)
-for the upstream reverse-engineering notes.
+## Requirements
 
-## Status
+- Rust toolchain (MSRV 1.89, edition 2024)
+- SDR:
+  - UHD via SoapySDR (`soapy_driver=uhd`) — B200 / B210 (other UHD devices untested)
+  - IIO via libiio (under development)
 
-M0..M3, M5, M6 done. RX confirmed **on-air**: a 30 s ambient listen
-on EU868 captured 4 MeshCore frames (SF8 BW62.5k sync 0x12), all CRC
-OK, SNR ~15 dB.
+## Build & run
 
-```
+```sh
+# Build everything
 cargo build --workspace
-cargo test  --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --check
 
-# Hardware (defaults: MeshCore EU868 SF8 BW62.5k preamble 16 sync 0x12)
-./target/debug/chirpmunk-trx \
-    --device-args 'soapy_driver=uhd,type=b200' \
-    --rx-antenna RX2 --tx-antenna TX/RX \
-    --rx-gain 40 --bind 127.0.0.1:5556
+# Run tests
+cargo test  --workspace
+
+# Lint
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Binaries land in `target/debug/`. Configuration is via TOML (see `apps/chirpmunk-trx/config.example.toml`). Default UDP ports:
+
+| Port | Endpoint                | Direction            |
+|------|-------------------------|----------------------|
+| 5555 | `chirpmunk core`        | publish to consumers |
+| 5556 | `chirpmunk-trx`         | producer → core      |
+| 5557 | `chirpmunk-scan`        | producer → core      |
+
+Start (each in its own shell):
+
+```sh
+# data-plane core (start before producers) — from chirpmunk-gr4
+lora core --config apps/config.toml
+
+# Rust transceiver (hardware)
+./target/debug/chirpmunk-trx --config apps/chirpmunk-trx/config.example.toml
 
 # Loopback (no hardware)
 ./target/debug/chirpmunk-trx --loopback --bind 127.0.0.1:5556
 ```
 
-22 tests, 20 suites. M4 (wideband scanner) deferred.
+## Credits
+
+The DSP pipeline draws on the EPFL TCL reference implementation ([gr-lora_sdr](https://github.com/tapparelj/gr-lora_sdr), GPL-3.0), adapted for FutureSDR's Rust block model. The CBOR/UDP control plane is a shared design with [`chirpmunk-gr4`](https://github.com/gretel/chirpmunk-gr4), authored alongside it.
+
+## Documentation
+
+Is currently lacking. Work in progress. Please stay tuned!
 
 ## License
 
-GPL-3.0-only. See [LICENSE](LICENSE).
+[GPL-3.0-only](LICENSE) — SPDX identifier `GPL-3.0-only`.
+Copyright © 2025–2026 Tom Hensel &lt;code@jitter.eu&gt;.
