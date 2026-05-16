@@ -13,14 +13,20 @@ description = "chirpmunk LoRa transceiver daemon."
 name = "chirpmunk-trx"
 path = "src/main.rs"
 
+[features]
+default = ["soapy"]
+soapy = ["chirpmunk-blocks/soapy"]
+iio = ["chirpmunk-blocks/iio", "dep:seify", "seify/iio", "seify/dummy"]
+
 [dependencies]
 futuresdr.workspace = true
-chirpmunk-blocks.workspace = true
+chirpmunk-blocks = { path = "../../crates/chirpmunk-blocks", default-features = false }
 chirpmunk-cbor.workspace = true
 chirpmunk-config.workspace = true
 chirpmunk-phy.workspace = true
 chirpmunk-udp.workspace = true
 clap.workspace = true
+seify = { path = "../../../seify", default-features = false, optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time", "signal"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

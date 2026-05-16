@@ -9,6 +9,11 @@ authors.workspace = true
 repository.workspace = true
 description = "FutureSDR blocks for chirpmunk: Splitter, MultiSfDecoder, FrameSink, ScanController, etc."
 
+[features]
+default = ["soapy"]
+soapy = ["dep:soapysdr"]
+iio = ["dep:seify"]
+
 [dependencies]
 futuresdr.workspace = true
 chirpmunk-cbor.workspace = true
@@ -20,7 +25,8 @@ tokio.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 uuid = { version = "1.10", features = ["v4"] }
 anyhow.workspace = true
-soapysdr = "0.4"
+soapysdr = { version = "0.4", optional = true }
+seify = { path = "../../../seify", default-features = false, optional = true }
 rustfft = "6.4"
 
 [dev-dependencies]

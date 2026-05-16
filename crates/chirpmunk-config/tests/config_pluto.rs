@@ -4,7 +4,7 @@
 
 use chirpmunk_config::Config;
 
-const PATH: &str = "../../../gr4-lora/apps/config-pluto.toml";
+const PATH: &str = "tests/fixtures/config-pluto.toml";
 
 #[test]
 fn parses_pluto_config() {

@@ -1,0 +1,62 @@
+# ── Hardware ─────────────────────────────────────────────────────────────────
+
+[device]
+driver = "plutoPAPR"            # gretel/SoapyPlutoPAPR post-rename (was "tezuka")
+param  = "uri=ip:10.0.23.159"   # explicit IIO-over-TCP; "" = mDNS (fragile under concurrent enumerate)
+clock  = "internal"             # Pluto has no external clock input
+
+[logging]
+level = "INFO"
+
+# ── Radio frontend ───────────────────────────────────────────────────────────
+
+[radio_868]
+freq              = 869618000    # MeshCore EU primary channel (Hz)
+rx_channel        = [0]          # Pluto has a single RX channel
+rx_antenna        = ["A_BALANCED"] # Pluto RX antenna (the only valid label)
+tx_channel        = 0            # Pluto has a single TX channel
+tx_antenna        = "A"          # Pluto TX antenna (the only valid label)
+rx_gain           = 60           # 0-71 dB manual PGA; 60 for ambient reception
+tx_gain           = 0            # 0-89 dB (0 = min power, safe default)
+lo_offset         = 0            # SoapyPlutoPAPR ignores the OFFSET tune arg
+dc_offset_auto    = false        # Pluto does not support HW DC correction
+
+# ── Transceiver (lora_trx) ───────────────────────────────────────────────────
+
+[trx]
+name      = "Pluto MeshCore 868 MHz"
+radio     = "radio_868"
+rate      = 1000000              # 1 MS/s
+enable_tx = false                # Pluto only has 1 TX ch
+use_aa_filter = true
+
+[trx.transmit]
+sf           = 8
+bw           = 62500
+cr           = 8                 # CR 4/8
+sync_word    = 0x12
+preamble_len = 16
+
+[trx.receive]
+bandwidths = [62500, 125000, 250000]
+
+[[trx.receive.chain]]
+label = "promisc"
+
+[trx.network]
+udp_listen      = "127.0.0.1"
+udp_port        = 5556
+status_interval = 10
+lbt             = true
+lbt_timeout_ms  = 2000
+tx_queue_depth  = 8
+
+# ── Scanner mode (lora_scan) ─────────────────────────────────────────────────
+
+[scan]
+radio        = "radio_868"
+freq_start   = 867000000
+freq_stop    = 870000000
+l1_rate      = 4000000
+master_clock = 8000000
+channel_bw   = 62500

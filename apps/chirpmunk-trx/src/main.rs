@@ -25,8 +25,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chirpmunk_blocks::{
-    ChannelActivityDetector, DedupState, FrameSink, FrameSinkConfig, LbtPolicy, SoapyDirectSink,
-    SoapyDirectSource, SoapyRxConfig, SoapyTxConfig, default_alpha, dispatch_lora_tx, open_device,
+    ChannelActivityDetector, DedupState, FrameSink, FrameSinkConfig, LbtPolicy, default_alpha,
+    dispatch_lora_tx,
+};
+#[cfg(feature = "iio")]
+use chirpmunk_blocks::{IioDirectSink, IioDirectSource, IioRxConfig, IioTxConfig, open_iio_device};
+#[cfg(feature = "soapy")]
+use chirpmunk_blocks::{
+    SoapyDirectSink, SoapyDirectSource, SoapyRxConfig, SoapyTxConfig, open_device,
 };
 use chirpmunk_cbor::LoraTx;
 use chirpmunk_config::{Config, Radio, RadioOrSection};
@@ -63,6 +69,10 @@ struct Args {
     /// Override the UDP bind address (`host:port`).
     #[clap(long)]
     bind: Option<String>,
+    /// Override log level (TRACE, DEBUG, INFO, WARN, ERROR).
+    /// Default: from config [logging] level, or INFO.
+    #[clap(long)]
+    log_level: Option<String>,
 }
 
 fn default_config_path() -> Option<PathBuf> {
@@ -86,8 +96,12 @@ fn init_tracing(level: &str) {
 }
 
 fn pick_radio<'a>(cfg: &'a Config, name: &str) -> Result<&'a Radio> {
+    // Config uses `[radio_NAME]` (TOML dotted-key alternative: `[radio.NAME]`)
+    let dot_key = format!("radio.{name}");
+    let flat_key = format!("radio_{name}");
     cfg.radios
-        .get(name)
+        .get(&dot_key)
+        .or_else(|| cfg.radios.get(&flat_key))
         .and_then(|r| match r {
             RadioOrSection::Radio(radio) => Some(radio),
             RadioOrSection::Other(_) => None,
@@ -95,12 +109,19 @@ fn pick_radio<'a>(cfg: &'a Config, name: &str) -> Result<&'a Radio> {
         .ok_or_else(|| anyhow!("config: radio section [{name}] not found"))
 }
 
+#[cfg(feature = "soapy")]
 fn build_seify_args(driver: &str, param: &str) -> String {
     if param.is_empty() {
         format!("soapy_driver={driver}")
     } else {
         format!("soapy_driver={driver},{param}")
     }
+}
+
+// Stub for IIO-only builds
+#[cfg(not(feature = "soapy"))]
+fn build_seify_args(_driver: &str, _param: &str) -> String {
+    String::new()
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -131,10 +152,12 @@ async fn main() -> Result<()> {
         }
     };
 
-    let log_level = cfg_opt
-        .as_ref()
-        .map(|c| c.logging.level.as_str())
-        .unwrap_or("INFO");
+    let log_level = args.log_level.as_deref().unwrap_or(
+        cfg_opt
+            .as_ref()
+            .map(|c| c.logging.level.as_str())
+            .unwrap_or("INFO"),
+    );
     init_tracing(log_level);
     if let Some(_cfg) = cfg_opt.as_ref() {
         info!("config loaded");
@@ -334,6 +357,7 @@ async fn main() -> Result<()> {
         // RX chain count = number of antennas to decode in parallel.
         // Empty `rx_channel` defaults to single-chain RX on chan 0.
         let rx_chain_count = radio.rx_channel.len().max(1);
+        #[cfg(feature = "soapy")]
         if cfg.device.driver == "plutoPAPR" && rx_chain_count > 1 {
             bail!("PlutoSDR has 1 RX channel; [radio_*] rx_channel must be [0] or empty");
         }
@@ -350,82 +374,142 @@ async fn main() -> Result<()> {
             "opening soapy direct device"
         );
 
-        // Single physical USRP, single soapysdr::Device handle, cloned
-        // (Arc-shared) to RX source and TX sink. seify cannot be used
-        // for TX on the LibreSDR_B220mini clone — its TxStreamer trait
-        // omits read_status / multi-channel buddy-share semantics that
-        // this hardware requires. See `references/tx-gap.md` skill.
-        let dev = open_device(device_label.as_str()).context("open soapy device")?;
+        let iio_mode = cfg.device.driver == "iio";
 
-        let rx_cfg = SoapyRxConfig {
-            freq_hz: radio.freq as f64,
-            rate_hz: sample_rate,
-            gain_db: radio.rx_gain,
-            antenna: radio.rx_antenna.first().cloned(),
-        };
-        let tx_cfg = SoapyTxConfig {
-            freq_hz: radio.freq as f64,
-            rate_hz: sample_rate,
-            gain_db: radio.tx_gain,
-            antenna: if radio.tx_antenna.is_empty() {
-                None
-            } else {
-                Some(radio.tx_antenna.clone())
-            },
-        };
-
-        let rx_source = fg.add(SoapyDirectSource::new(dev.clone(), rx_cfg));
-        let tx_sink = fg.add(SoapyDirectSink::new(dev.clone(), tx_cfg));
-
-        if rx_chain_count == 2 {
-            // Diversity RX: chain 1 gets its own (frame_sync, decoder,
-            // frame_sink) pair; both FrameSinks share the dedup state
-            // so identical decodes within `dedup_window_ms` collapse
-            // into one emitted lora_frame with merged phy.diversity.
-            // CAD stays on chain 0 only — single LBT decision point
-            // for the radio.
-            let (frame_sync_1, decoder_1) = build_lora_rx_soft_decoding(
-                &mut fg,
-                Channel::EU868_1,
-                bw,
-                sf,
-                HeaderMode::Explicit,
-                LdroMode::AUTO,
-                Some(&[sync_word]),
-                os_factor,
-                Some(preamble_len),
-                None,
-                false,
-                None,
-            )?;
-            let mut cfg1 = cfg_sink_template.clone();
-            cfg1.rx_channel = Some(1);
-            cfg1.decode_label = Some("hardware-chan1".into());
-            let frame_sink_1 = fg.add(FrameSink::new(cfg1, dedup.clone()));
-
-            connect!(fg,
-                rx_source.out0 > entry_dup;
-                rx_source.out1 > frame_sync_1;
-                entry_dup.outputs[0] > frame_sync;
-                entry_dup.outputs[1] > cad_id;
-                transmitter > tx_sink;
-                decoder.out_annotated | frame_sink;
-                decoder_1.out_annotated | frame_sink_1;
+        // Reject iio driver when the `iio` feature is not compiled in.
+        #[cfg(not(feature = "iio"))]
+        if iio_mode {
+            bail!(
+                "config: device.driver = \"iio\" but chirpmunk-trx was compiled without the `iio` feature; rebuild with `--features iio`"
             );
-        } else {
-            // Single-chain RX. Channel 1 is still opened on the
-            // hardware (B200 symmetry rule) so we sink its IQ to
-            // keep the streamer draining both channels in lockstep.
-            let rx_chan1_null = fg.add(NullSink::<Complex32>::new());
+        }
+
+        // Dispatch: seify-IIO for PlutoSDR, SoapySDR for everything else.
+        // seify TxStreamer cannot do B210 dual-channel TX (no read_status),
+        // but Pluto IIO is single-channel — fine for both RX and TX.
+        #[cfg(feature = "iio")]
+        if iio_mode {
+            // ── seify IIO path (PlutoSDR) ──
+            info!(
+                device_args = %device_label,
+                freq = radio.freq,
+                rx_gain = radio.rx_gain,
+                "opening iio device via seify"
+            );
+            let uri = if cfg.device.param.starts_with("uri=") {
+                cfg.device.param[4..].to_string()
+            } else if cfg.device.param.is_empty() {
+                "local:".to_string()
+            } else {
+                cfg.device.param.clone()
+            };
+            let dev = open_iio_device(&uri).context("open iio device")?;
+
+            let rx_cfg = IioRxConfig {
+                freq_hz: radio.freq as f64,
+                rate_hz: sample_rate,
+                gain_db: radio.rx_gain,
+                antenna: radio.rx_antenna.first().cloned(),
+                uri: uri.clone(),
+            };
+            let tx_cfg = IioTxConfig {
+                freq_hz: radio.freq as f64,
+                rate_hz: sample_rate,
+                gain_db: radio.tx_gain,
+            };
+
+            let rx_source = fg.add(IioDirectSource::new(dev.clone(), rx_cfg));
+            let tx_sink = fg.add(IioDirectSink::new(dev.clone(), tx_cfg));
+
             connect!(fg,
-                rx_source.out0 > entry_dup;
-                rx_source.out1 > rx_chan1_null;
+                rx_source.out > entry_dup;
                 entry_dup.outputs[0] > frame_sync;
                 entry_dup.outputs[1] > cad_id;
                 transmitter > tx_sink;
                 decoder.out_annotated | frame_sink;
             );
         }
+
+        #[cfg(feature = "soapy")]
+        if !iio_mode {
+            // ── SoapySDR path (B210/B220/UHD/PlutoPAPR) ──
+            // Single physical USRP, single soapysdr::Device handle, cloned
+            // (Arc-shared) to RX source and TX sink. seify cannot be used
+            // for TX on the LibreSDR_B220mini clone — its TxStreamer trait
+            // omits read_status / multi-channel buddy-share semantics that
+            // this hardware requires. See `references/tx-gap.md` skill.
+            let dev = open_device(device_label.as_str()).context("open soapy device")?;
+
+            let rx_cfg = SoapyRxConfig {
+                freq_hz: radio.freq as f64,
+                rate_hz: sample_rate,
+                gain_db: radio.rx_gain,
+                antenna: radio.rx_antenna.first().cloned(),
+            };
+            let tx_cfg = SoapyTxConfig {
+                freq_hz: radio.freq as f64,
+                rate_hz: sample_rate,
+                gain_db: radio.tx_gain,
+                antenna: if radio.tx_antenna.is_empty() {
+                    None
+                } else {
+                    Some(radio.tx_antenna.clone())
+                },
+            };
+
+            let rx_source = fg.add(SoapyDirectSource::new(dev.clone(), rx_cfg));
+            let tx_sink = fg.add(SoapyDirectSink::new(dev.clone(), tx_cfg));
+
+            if rx_chain_count == 2 {
+                // Diversity RX: chain 1 gets its own (frame_sync, decoder,
+                // frame_sink) pair; both FrameSinks share the dedup state
+                // so identical decodes within `dedup_window_ms` collapse
+                // into one emitted lora_frame with merged phy.diversity.
+                // CAD stays on chain 0 only — single LBT decision point
+                // for the radio.
+                let (frame_sync_1, decoder_1) = build_lora_rx_soft_decoding(
+                    &mut fg,
+                    Channel::EU868_1,
+                    bw,
+                    sf,
+                    HeaderMode::Explicit,
+                    LdroMode::AUTO,
+                    Some(&[sync_word]),
+                    os_factor,
+                    Some(preamble_len),
+                    None,
+                    false,
+                    None,
+                )?;
+                let mut cfg1 = cfg_sink_template.clone();
+                cfg1.rx_channel = Some(1);
+                cfg1.decode_label = Some("hardware-chan1".into());
+                let frame_sink_1 = fg.add(FrameSink::new(cfg1, dedup.clone()));
+
+                connect!(fg,
+                    rx_source.out0 > entry_dup;
+                    rx_source.out1 > frame_sync_1;
+                    entry_dup.outputs[0] > frame_sync;
+                    entry_dup.outputs[1] > cad_id;
+                    transmitter > tx_sink;
+                    decoder.out_annotated | frame_sink;
+                    decoder_1.out_annotated | frame_sink_1;
+                );
+            } else {
+                // Single-chain RX. Channel 1 is still opened on the
+                // hardware (B200 symmetry rule) so we sink its IQ to
+                // keep the streamer draining both channels in lockstep.
+                let rx_chan1_null = fg.add(NullSink::<Complex32>::new());
+                connect!(fg,
+                    rx_source.out0 > entry_dup;
+                    rx_source.out1 > rx_chan1_null;
+                    entry_dup.outputs[0] > frame_sync;
+                    entry_dup.outputs[1] > cad_id;
+                    transmitter > tx_sink;
+                    decoder.out_annotated | frame_sink;
+                );
+            }
+        } // end iio_mode dispatch
     }
 
     // Spectrum tap on entry_dup.outputs[2]. When [trx.spectrum] is

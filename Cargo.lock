@@ -357,6 +357,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cfg_aliases"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
+
+[[package]]
 name = "chacha20"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -378,6 +384,7 @@ dependencies = [
  "chrono",
  "futuresdr",
  "rustfft",
+ "seify 0.19.0",
  "serde_json",
  "soapysdr",
  "thiserror",
@@ -450,6 +457,7 @@ dependencies = [
  "chirpmunk-udp",
  "clap",
  "futuresdr",
+ "seify 0.19.0",
  "serde_json",
  "tokio",
  "tracing",
@@ -977,7 +985,7 @@ dependencies = [
  "once_cell",
  "rustc_version",
  "rustfft",
- "seify",
+ "seify 0.18.0",
  "serde",
  "slab",
  "thiserror",
@@ -1011,7 +1019,7 @@ version = "0.0.16-dev"
 dependencies = [
  "dyn-clone",
  "num-complex",
- "seify",
+ "seify 0.18.0",
  "serde",
  "serde_json",
  "thiserror",
@@ -1314,6 +1322,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "industrial-io"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "348ab060d6e63ff76337f57d7646fc3bd38d7abc0ac8c98b7acedecf2262e90f"
+dependencies = [
+ "libiio-sys",
+ "nix",
+ "thiserror",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1381,6 +1400,10 @@ name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+
+[[package]]
+name = "libiio-sys"
+version = "0.4.1"
 
 [[package]]
 name = "libloading"
@@ -1494,6 +1517,18 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys",
+]
+
+[[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -2021,7 +2056,23 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "soapysdr",
+ "thiserror",
+]
+
+[[package]]
+name = "seify"
+version = "0.19.0"
+dependencies = [
+ "futures",
+ "industrial-io",
+ "libc",
+ "log",
+ "nom 8.0.0",
+ "num-complex",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "serde_with",
  "thiserror",
 ]
 

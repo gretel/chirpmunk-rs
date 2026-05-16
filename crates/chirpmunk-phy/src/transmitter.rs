@@ -133,6 +133,8 @@ where
             } else {
                 if self.finished {
                     io.finished = true;
+                } else {
+                    io.call_again = true;
                 }
                 return Ok(());
             }
